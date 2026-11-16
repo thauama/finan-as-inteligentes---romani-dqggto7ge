@@ -10,6 +10,7 @@ import {
 import type { RecordModel } from 'pocketbase'
 
 import pb from '@/lib/pocketbase/client'
+import { refreshSession } from '@/lib/pocketbase/sessionExpiry'
 
 interface AuthContextValue {
   user: RecordModel | null
@@ -30,14 +31,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(record)
     }, true)
     if (pb.authStore.isValid) {
-      pb.collection('users')
-        .authRefresh()
-        .catch(() => pb.authStore.clear())
-        .finally(() => setReady(true))
+      refreshSession().finally(() => setReady(true))
     } else {
       setReady(true)
     }
-    return unsubscribe
+
+    // Renovação automática da sessão: o token do PocketBase vale ~14 dias, mas
+    // renovações concorrentes/falhas intermitentes derrubavam a sessão no meio
+    // do uso. Renova a cada 10 minutos (bem dentro da validade) e também
+    // quando a aba volta ao foco/segue visível — se o refresh falhar, o
+    // authStore é limpo e o ProtectedLayout redireciona para /login.
+    const REFRESH_INTERVAL_MS = 10 * 60 * 1000
+    let stopped = false
+    const tick = () => {
+      if (stopped) return
+      void refreshSession()
+    }
+    const interval = window.setInterval(tick, REFRESH_INTERVAL_MS)
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') tick()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('focus', onVisibility)
+
+    return () => {
+      stopped = true
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', onVisibility)
+      unsubscribe()
+    }
   }, [])
 
   const login = useCallback(async (email: string, password: string) => {

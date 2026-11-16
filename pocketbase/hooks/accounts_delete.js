@@ -10,7 +10,9 @@ routerAdd('GET', '/backend/v1/accounts/{id}/impact', (e) => {
   if (!userId) {
     return e.json(401, { message: 'Sessão expirada. Faça login novamente.' })
   }
-  const accountId = String(e.requestPathValue('id') || '').trim()
+  // API do JSVM v0.36: parâmetro de rota fica em e.request.pathValue —
+  // e.requestPathValue não existe (TypeError "Object has no member").
+  const accountId = String(e.request.pathValue('id') || '').trim()
   if (!accountId) {
     return e.badRequestError('Conta não informada.')
   }
@@ -68,7 +70,9 @@ routerAdd('DELETE', '/backend/v1/accounts/{id}', (e) => {
   if (!userId) {
     return e.json(401, { message: 'Sessão expirada. Faça login novamente.' })
   }
-  const accountId = String(e.requestPathValue('id') || '').trim()
+  // API do JSVM v0.36: parâmetro de rota fica em e.request.pathValue —
+  // e.requestPathValue não existe (TypeError "Object has no member").
+  const accountId = String(e.request.pathValue('id') || '').trim()
   if (!accountId) {
     return e.badRequestError('Conta não informada.')
   }

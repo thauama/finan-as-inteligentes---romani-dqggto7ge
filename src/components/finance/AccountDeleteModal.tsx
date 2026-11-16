@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { AlertTriangle, Loader2, Trash2 } from 'lucide-react'
 
 import {
@@ -11,6 +12,8 @@ import {
 import { useFinance } from '@/contexts/FinanceContext'
 import { useToast } from '@/hooks/use-toast'
 import { getErrorMessage } from '@/lib/pocketbase/errors'
+import { isSessionExpiredError } from '@/lib/pocketbase/sessionExpiry'
+import { SessionExpiryPanel } from '@/components/finance/SessionExpiryPanel'
 import {
   deleteAccountWithCleanup,
   getAccountImpact,
@@ -48,15 +51,22 @@ export function AccountDeleteModal({
   const [loadingImpact, setLoadingImpact] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState('')
+  const [authError, setAuthError] = useState(false)
+  const navigate = useNavigate()
 
   const loadImpact = useCallback(async (accountId: string) => {
     setLoadingImpact(true)
     setError('')
+    setAuthError(false)
     try {
       setImpact(await getAccountImpact(accountId))
     } catch (err) {
       setImpact(null)
-      setError(getErrorMessage(err))
+      if (isSessionExpiredError(err)) {
+        setAuthError(true)
+      } else {
+        setError(getErrorMessage(err))
+      }
     } finally {
       setLoadingImpact(false)
     }
@@ -77,6 +87,7 @@ export function AccountDeleteModal({
     if (!account) return
     setDeleting(true)
     setError('')
+    setAuthError(false)
     try {
       await deleteAccountWithCleanup(account.id, mode)
       await refreshAccounts()
@@ -87,7 +98,11 @@ export function AccountDeleteModal({
       onDeleted?.(account)
       onOpenChange(false)
     } catch (err) {
-      setError(getErrorMessage(err))
+      if (isSessionExpiredError(err)) {
+        setAuthError(true)
+      } else {
+        setError(getErrorMessage(err))
+      }
     } finally {
       setDeleting(false)
     }
@@ -125,7 +140,15 @@ export function AccountDeleteModal({
           </DialogDescription>
         </DialogHeader>
 
-        {loadingImpact ? (
+        {authError ? (
+          <SessionExpiryPanel
+            onClose={() => onOpenChange(false)}
+            onLogin={() => {
+              onOpenChange(false)
+              navigate('/login')
+            }}
+          />
+        ) : loadingImpact ? (
           <div className="flex items-center gap-2 py-6 text-sm text-fin-muted">
             <Loader2 className="h-4 w-4 animate-spin text-fin-primary" />
             Verificando vínculos da conta...

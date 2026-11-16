@@ -108,7 +108,9 @@ routerAdd('PATCH', '/backend/v1/transactions/transfer/{id}', (e) => {
   // e.auth pode ser null em requisições sem sessão — ler com segurança para
   // devolver o 401 amigável em vez de um erro 500 do JSVM.
   const userId = (e.auth && e.auth.id) || ''
-  const recordId = String(e.requestPathValue('id') || '').trim()
+  // API do JSVM v0.36: parâmetro de rota fica em e.request.pathValue —
+  // e.requestPathValue não existe (TypeError "Object has no member").
+  const recordId = String(e.request.pathValue('id') || '').trim()
 
   const accountId = String(body.account_id || '').trim()
   const destinationId = String(body.destination_account_id || '').trim()
