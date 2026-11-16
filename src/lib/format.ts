@@ -52,6 +52,13 @@ export function monthBounds(month: string) {
   return { start, next }
 }
 
+/** Desloca um mês "aaaa-mm" por N meses (negativo volta), respeitando a virada de ano. */
+export function shiftMonth(month: string, delta: number): string {
+  const [year, monthNumber] = month.split('-').map(Number)
+  const absolute = year * 12 + (monthNumber - 1) + delta
+  return `${Math.floor(absolute / 12)}-${String((absolute % 12) + 1).padStart(2, '0')}`
+}
+
 export function monthTitle(month: string) {
   return monthLabel
     .format(new Date(`${month}-01T12:00:00Z`))

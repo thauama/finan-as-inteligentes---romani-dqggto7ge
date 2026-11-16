@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
+  CalendarDays,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   FolderOpen,
   MoreHorizontal,
   Pencil,
@@ -34,7 +37,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useFinance } from '@/contexts/FinanceContext'
 import { useToast } from '@/hooks/use-toast'
-import { brl, currentMonth, monthBounds, monthTitle, todayInput } from '@/lib/format'
+import { brl, currentMonth, monthBounds, monthTitle, shiftMonth, todayInput } from '@/lib/format'
 import { CalendarClock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { deleteCategory } from '@/services/categories'
@@ -69,6 +72,9 @@ export default function CategoriesPage() {
   const [budgetModalOpen, setBudgetModalOpen] = useState(false)
   const [editingBudget, setEditingBudget] = useState<Budget | null>(null)
   const [deletingBudget, setDeletingBudget] = useState<Budget | null>(null)
+  const [metasMonth, setMetasMonth] = useState(currentMonth)
+  const today = todayInput()
+  const isCurrentMetasMonth = metasMonth === currentMonth()
 
   const reloadBudgets = () => {
     listBudgets()
@@ -87,31 +93,67 @@ export default function CategoriesPage() {
         setBudgets(budgetList)
       })
       .finally(() => setLoading(false))
-    listTransactions(`date > '${todayInput()}'`)
+  }, [])
+
+  useEffect(() => {
+    listTransactions(`date > '${today}'`)
       .then((records) =>
         setFutureInstallments(
           records.filter((t) => t.type === 'despesa' && isInstallmentTransaction(t)),
         ),
       )
       .catch(() => setFutureInstallments([]))
-  }, [])
+  }, [today])
 
+  // Metas navegáveis: em outro mês, o realizado é buscado do backend (mesma
+  // regra do Dashboard — apenas despesas com vencimento no mês exibido).
+  const { start: metasStart, next: metasNext } = monthBounds(metasMonth)
+  const monthBudgetTransactions = useMemo(() => {
+    if (isCurrentMetasMonth) return transactions
+    return transactions.filter((t) => t.date >= metasStart && t.date < metasNext)
+  }, [isCurrentMetasMonth, transactions, metasStart, metasNext])
+
+  useEffect(() => {
+    if (isCurrentMetasMonth) return
+    let cancelled = false
+    setLoading(true)
+    listTransactions(`date >= '${metasStart}' && date < '${metasNext}'`)
+      .then((records) => {
+        if (!cancelled) setTransactions(records)
+      })
+      .catch(() => {
+        if (!cancelled) setTransactions([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [metasMonth, isCurrentMetasMonth, metasStart, metasNext])
+
+  // Previsão de parcelas a partir do MÊS EXIBIDO na navegação: só entram os
+  // vencimentos estritamente depois do mês navegado (cada parcela conta como
+  // realizada no mês do seu vencimento — regra v0.0.21).
   const installmentForecast = useMemo(() => {
     const byMonth = new Map<string, number>()
-    let total = 0
     for (const t of futureInstallments) {
       const key = t.date.slice(0, 7)
       byMonth.set(key, (byMonth.get(key) || 0) + t.amount)
-      total += t.amount
     }
+    const displayed = Array.from(byMonth.entries())
+      .filter(([m]) => m > metasMonth)
+      .sort(([a], [b]) => a.localeCompare(b))
+    const futureMonthTotal = displayed.reduce((sum, [, amount]) => sum + amount, 0)
+    const futureMonthCount = futureInstallments.filter(
+      (t) => t.date.slice(0, 7) > metasMonth,
+    ).length
     return {
-      count: futureInstallments.length,
-      total,
-      months: Array.from(byMonth.entries())
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([m, amount]) => ({ month: m, amount, label: monthTitle(m) })),
+      count: futureMonthCount,
+      total: futureMonthTotal,
+      months: displayed.map(([m, amount]) => ({ month: m, amount, label: monthTitle(m) })),
     }
-  }, [futureInstallments])
+  }, [futureInstallments, metasMonth])
 
   const filteredRoots = useMemo(
     () =>
@@ -149,7 +191,7 @@ export default function CategoriesPage() {
     const subcategoryIds = categories.filter((c) => c.parent === budgetCategory.id).map((c) => c.id)
     const allRelevantIds = [budgetCategory.id, ...subcategoryIds]
     let spent = 0
-    for (const t of transactions) {
+    for (const t of monthBudgetTransactions) {
       if (t.type !== 'despesa' || !allRelevantIds.includes(t.category)) continue
       spent += t.amount
     }
@@ -343,8 +385,8 @@ export default function CategoriesPage() {
                   <div>
                     <h2 className="text-sm font-semibold">Previsão de parcelas</h2>
                     <p className="mt-0.5 text-xs text-fin-muted">
-                      {installmentForecast.count} parcela(s) futura(s) — contam como realizada no
-                      mês do vencimento
+                      Vencimentos após {monthTitle(metasMonth)} — {installmentForecast.count}{' '}
+                      parcela(s) futura(s), contam como realizada no mês do vencimento
                     </p>
                   </div>
                 </div>
@@ -367,19 +409,51 @@ export default function CategoriesPage() {
             </article>
           )}
 
-          <div className="flex flex-col gap-2 rounded-2xl border border-fin-border bg-fin-surface/50 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-3 rounded-2xl border border-fin-border bg-fin-surface/50 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <span className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-50 text-fin-primary">
                 <Target className="h-5 w-5" />
               </span>
               <div>
-                <h2 className="text-sm font-semibold">Acompanhamento das Metas do Mês</h2>
+                <h2 className="text-sm font-semibold">Acompanhamento das Metas</h2>
                 <p className="text-xs text-fin-muted">
-                  Progresso dos gastos acumulados no mês corrente vs. limites definidos.
+                  Progresso dos gastos de {monthTitle(metasMonth).toLowerCase()} vs. limites
+                  definidos — cada parcela conta como realizada no mês do vencimento.
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-3 text-xs text-fin-muted">
+            {/* Navegação entre meses */}
+            <div className="flex items-center gap-1 rounded-xl border border-fin-border bg-white p-1 shadow-2xs">
+              <button
+                type="button"
+                aria-label="Mês anterior"
+                className="rounded-lg p-1.5 text-fin-muted hover:bg-fin-surface hover:text-fin-text"
+                onClick={() => setMetasMonth((m) => shiftMonth(m, -1))}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <span className="inline-flex items-center gap-1.5 px-2 text-xs font-semibold text-fin-text">
+                <CalendarDays className="h-3.5 w-3.5 text-fin-primary" />
+                {monthTitle(metasMonth)}
+              </span>
+              <button
+                type="button"
+                aria-label="Próximo mês"
+                className="rounded-lg p-1.5 text-fin-muted hover:bg-fin-surface hover:text-fin-text"
+                onClick={() => setMetasMonth((m) => shiftMonth(m, 1))}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                className="ml-1 rounded-lg px-2 py-1 text-[11px] font-semibold text-fin-primary hover:bg-indigo-50 disabled:cursor-default disabled:opacity-40"
+                disabled={isCurrentMetasMonth}
+                onClick={() => setMetasMonth(currentMonth())}
+              >
+                Hoje
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-xs text-fin-muted">
               <span className="flex items-center gap-1.5">
                 <span className="h-2.5 w-2.5 rounded-full bg-[#34C759]" />
                 &lt; 80% Normal
