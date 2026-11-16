@@ -18,6 +18,8 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowDownRight,
+  MoreVertical,
+  Trash2,
   ArrowRight,
   ArrowUpRight,
   Banknote,
@@ -26,6 +28,7 @@ import {
   CheckCircle2,
   CreditCard,
   Landmark,
+  Pencil,
   Plus,
   ReceiptText,
   Repeat,
@@ -33,6 +36,7 @@ import {
   WalletCards,
 } from 'lucide-react'
 
+import { AccountDeleteModal } from '@/components/finance/AccountDeleteModal'
 import { AccountModal } from '@/components/finance/AccountModal'
 import { BillModal } from '@/components/finance/BillModal'
 import { SettleBillModal } from '@/components/finance/SettleBillModal'
@@ -96,6 +100,9 @@ export default function Index() {
   const [billDirection, setBillDirection] = useState<BillDirection>('pagar')
   const [settling, setSettling] = useState<Bill | null>(null)
   const [showAllAccounts, setShowAllAccounts] = useState(false)
+  const [accountMenu, setAccountMenu] = useState<string | null>(null)
+  const [deletingAccount, setDeletingAccount] = useState<Account | null>(null)
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null)
 
   const month = currentMonth()
 
@@ -515,7 +522,23 @@ export default function Index() {
           </div>
           <div className="space-y-1">
             {accountBalances.slice(0, showAllAccounts ? undefined : 4).map((account) => (
-              <AccountRow key={account.id} account={account} />
+              <AccountRow
+                key={account.id}
+                account={account}
+                menuOpen={accountMenu === account.id}
+                onMenuToggle={() =>
+                  setAccountMenu((current) => (current === account.id ? null : account.id))
+                }
+                onEdit={() => {
+                  setAccountMenu(null)
+                  setEditingAccount(account)
+                  setAccountModal(true)
+                }}
+                onDelete={() => {
+                  setAccountMenu(null)
+                  setDeletingAccount(account)
+                }}
+              />
             ))}
             {accountBalances.length === 0 && (
               <EmptyState icon={Landmark} text="Adicione sua primeira conta financeira." />
@@ -945,9 +968,23 @@ export default function Index() {
         </div>
       </article>
 
+      <AccountDeleteModal
+        account={deletingAccount}
+        open={Boolean(deletingAccount)}
+        onOpenChange={(open) => {
+          if (!open) setDeletingAccount(null)
+        }}
+        onDeleted={() => {
+          void reload()
+        }}
+      />
       <AccountModal
+        account={editingAccount}
         open={accountModal}
-        onOpenChange={setAccountModal}
+        onOpenChange={(open) => {
+          setAccountModal(open)
+          if (!open) setEditingAccount(null)
+        }}
         onSaved={() =>
           toast({
             title: 'Conta adicionada',
@@ -984,11 +1021,23 @@ export default function Index() {
   )
 }
 
-function AccountRow({ account }: { account: Account & { balance: number } }) {
+function AccountRow({
+  account,
+  menuOpen,
+  onMenuToggle,
+  onEdit,
+  onDelete,
+}: {
+  account: Account & { balance: number }
+  menuOpen: boolean
+  onMenuToggle: () => void
+  onEdit: () => void
+  onDelete: () => void
+}) {
   const Icon =
     account.type === 'cartao' ? CreditCard : account.type === 'carteira' ? WalletCards : Landmark
   return (
-    <div className="flex items-center gap-3 rounded-xl px-1 py-3 transition hover:bg-fin-surface">
+    <div className="group flex items-center gap-3 rounded-xl px-1 py-3 transition hover:bg-fin-surface">
       <span
         className="grid h-10 w-10 place-items-center rounded-full"
         style={{ background: `${account.color}16`, color: account.color }}
@@ -997,6 +1046,44 @@ function AccountRow({ account }: { account: Account & { balance: number } }) {
       </span>
       <span className="min-w-0 flex-1 truncate text-sm font-medium">{account.name}</span>
       <strong className="text-sm font-semibold">{brl.format(account.balance)}</strong>
+      <div className="relative shrink-0">
+        <button
+          onClick={onMenuToggle}
+          aria-label={`Opções da conta ${account.name}`}
+          className="grid h-8 w-8 place-items-center rounded-full text-fin-muted transition hover:bg-fin-surface hover:text-fin-text"
+        >
+          <MoreVertical className="h-4 w-4" />
+        </button>
+        {menuOpen && (
+          <>
+            <button
+              type="button"
+              aria-hidden
+              tabIndex={-1}
+              onClick={onMenuToggle}
+              className="fixed inset-0 z-40 cursor-default"
+            />
+            <div className="absolute right-0 top-9 z-50 w-40 overflow-hidden rounded-xl border border-fin-border bg-white py-1 shadow-lg">
+              <button
+                type="button"
+                onClick={onEdit}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-fin-text transition hover:bg-fin-surface"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                Editar
+              </button>
+              <button
+                type="button"
+                onClick={onDelete}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-fin-danger transition hover:bg-red-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Excluir
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   )
 }
