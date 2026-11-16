@@ -105,3 +105,13 @@ export function stripInstallmentSuffix(description: string): string {
 export function installmentNote(current: number, total: number): string {
   return `Importado por PDF — parcela ${current}/${total}`
 }
+
+/**
+ * Reconhece um lançamento criado pelo parcelamento (nota "parcela N/M" ou
+ * sufixo #P no grupo) — usado pela previsão no dashboard/orçamento.
+ */
+export function isInstallmentTransaction(t: { notes?: string; description?: string }): boolean {
+  const note = String(t?.notes || '')
+  if (/\bparcela\s*\d{1,2}\s*\/\s*\d{1,2}\b/i.test(note)) return true
+  return /#P[A-Za-z0-9]+/.test(String(t?.description || ''))
+}
