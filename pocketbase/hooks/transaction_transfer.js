@@ -5,7 +5,9 @@
 routerAdd('POST', '/backend/v1/transactions/transfer', (e) => {
   const info = e.requestInfo()
   const body = (info && info.body) || {}
-  const userId = e.auth.id
+  // e.auth pode ser null em requisições sem sessão — ler com segurança para
+  // devolver o 401 amigável em vez de um erro 500 do JSVM.
+  const userId = (e.auth && e.auth.id) || ''
 
   const accountId = String(body.account_id || '').trim()
   const destinationId = String(body.destination_account_id || '').trim()
@@ -103,7 +105,9 @@ routerAdd('POST', '/backend/v1/transactions/transfer', (e) => {
 routerAdd('PATCH', '/backend/v1/transactions/transfer/{id}', (e) => {
   const info = e.requestInfo()
   const body = (info && info.body) || {}
-  const userId = e.auth.id
+  // e.auth pode ser null em requisições sem sessão — ler com segurança para
+  // devolver o 401 amigável em vez de um erro 500 do JSVM.
+  const userId = (e.auth && e.auth.id) || ''
   const recordId = String(e.requestPathValue('id') || '').trim()
 
   const accountId = String(body.account_id || '').trim()
