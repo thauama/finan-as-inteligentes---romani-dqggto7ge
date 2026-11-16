@@ -55,9 +55,12 @@ export async function confirmPdfImport(
   accountId: string,
   items: PdfImportDraftItem[],
 ): Promise<PdfImportResult> {
+  // IMPORTANTE: o corpo vai em `body` — o SDK trata qualquer opção desconhecida
+  // (ex.: `content`) como query parameter e o hook receberia o corpo vazio.
   const result = await pb.send<{ created: number }>('/backend/v1/import/pdf/confirm', {
     method: 'POST',
-    content: JSON.stringify({
+    headers: { 'Content-Type': 'application/json' },
+    body: {
       account_id: accountId,
       items: items.map((item) => ({
         date: item.date,
@@ -66,8 +69,7 @@ export async function confirmPdfImport(
         type: item.type,
         category_id: item.category_id,
       })),
-    }),
-    headers: { 'Content-Type': 'application/json' },
+    },
   })
   return { created: result?.created ?? items.length }
 }

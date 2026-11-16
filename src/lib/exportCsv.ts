@@ -1,7 +1,7 @@
 import type { Account, Category, Transaction } from '@/types/finance'
 import { getCategoryPath } from '@/lib/categories'
 import { formatDate } from '@/lib/format'
-import { transactionTypeLabel } from '@/lib/transactionTypes'
+import { isTransfer, transactionTypeLabel, transferAccountsLabel } from '@/lib/transactionTypes'
 
 /**
  * Escapa uma célula de CSV delimitada por ponto e vírgula (;).
@@ -26,6 +26,8 @@ function formatCsvAmount(amount: number): string {
 /**
  * Exporta lançamentos como CSV real com BOM UTF-8 e download direto via Blob.
  * Colunas: Data, Descrição, Categoria (caminho completo tipo "Alimentação > Mercado"), Conta, Tipo, Valor, Notas.
+ * Transferências (type='transferencia') entram com a conta na coluna "Conta / Rota"
+ * ("Origem → Destino") e ficam fora dos totais de receita/despesa do relatório.
  */
 export function exportTransactionsToCsv(
   transactions: Transaction[],
@@ -34,13 +36,19 @@ export function exportTransactionsToCsv(
   filename = 'lancamentos.csv',
 ) {
   const accountsMap = new Map<string, string>(accounts.map((a) => [a.id, a.name]))
+  const accountsById = new Map(accounts.map((a) => [a.id, { name: a.name }]))
 
-  const headers = ['Data', 'Descrição', 'Categoria', 'Conta', 'Tipo', 'Valor', 'Notas']
+  const headers = ['Data', 'Descrição', 'Categoria', 'Conta / Rota', 'Tipo', 'Valor', 'Notas']
 
   const rows = transactions.map((t) => {
     const dateFormatted = formatDate(t.date)
     const categoryPath = getCategoryPath(t.category, categories)
-    const accountName = accountsMap.get(t.account) || t.expand?.account?.name || 'Sem conta'
+    const accountName = isTransfer(t)
+      ? transferAccountsLabel(t, accountsById) ||
+        accountsMap.get(t.account) ||
+        t.expand?.account?.name ||
+        'Sem conta'
+      : accountsMap.get(t.account) || t.expand?.account?.name || 'Sem conta'
     const typeLabel = transactionTypeLabel(t)
     const valueFormatted = formatCsvAmount(t.amount)
     const notes = t.notes || ''
