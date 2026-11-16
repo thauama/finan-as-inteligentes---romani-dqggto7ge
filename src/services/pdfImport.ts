@@ -11,10 +11,16 @@ export interface PdfImportDraftItem {
   type: PdfImportDraftType
   category_id: string
   category_name?: string
+  /** Parcela atual desta linha (1-based) — presente só quando é parcelada. */
+  installment_current?: number
+  /** Total de parcelas da compra — presente só quando é parcelada. */
+  installment_total?: number
 }
 
 export interface PdfImportResult {
   created: number
+  /** Parcelas futuras criadas além das linhas confirmadas. */
+  future_created: number
 }
 
 export interface PdfImportConfirmInput extends PdfImportDraftItem {}
@@ -151,21 +157,29 @@ export async function confirmPdfImport(
   // IMPORTANTE: o corpo vai em `body` — o SDK trata qualquer opção desconhecida
   // (ex.: `content`) como query parameter e o hook receberia o corpo vazio.
   try {
-    const result = await pb.send<{ created: number }>('/backend/v1/import/pdf/confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: {
-        account_id: accountId,
-        items: items.map((item) => ({
-          date: item.date,
-          description: item.description,
-          amount: item.amount,
-          type: item.type,
-          category_id: item.category_id,
-        })),
+    const result = await pb.send<{ created: number; future_created?: number }>(
+      '/backend/v1/import/pdf/confirm',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: {
+          account_id: accountId,
+          items: items.map((item) => ({
+            date: item.date,
+            description: item.description,
+            amount: item.amount,
+            type: item.type,
+            category_id: item.category_id,
+            installment_current: item.installment_current || 0,
+            installment_total: item.installment_total || 0,
+          })),
+        },
       },
-    })
-    return { created: result?.created ?? items.length }
+    )
+    return {
+      created: result?.created ?? items.length,
+      future_created: result?.future_created ?? 0,
+    }
   } catch (err) {
     throw toPdfImportError(err)
   }

@@ -11,6 +11,7 @@
  */
 import * as XLSX from 'xlsx'
 import type { PdfImportDraftItem } from '@/services/pdfImport'
+import { detectInstallment } from '@/lib/installments'
 
 export const IMPORT_SHEET_MAX_BYTES = 5 * 1024 * 1024
 export const IMPORT_SHEET_MAX_ROWS = 2000
@@ -240,13 +241,21 @@ function buildDraftItem(input: {
   const type: 'receita' | 'despesa' = explicitType || (signed < 0 ? 'despesa' : 'receita')
   const amount = Math.abs(Math.round(signed * 100) / 100)
   if (amount <= 0) return null
-  return {
+  const item: PdfImportDraftItem = {
     date,
     description: description.slice(0, 200),
     amount,
     type,
     category_id: suggestCategory(description, type, categories),
   }
+  // Detecção de parcelamento (regex, sem IA): "LOJA - 3/6", "PARCELA 2/10",
+  // "3X6", "12X" — o VALOR da linha já é o da parcela mensal (não multiplicar).
+  const match = detectInstallment(description)
+  if (match) {
+    item.installment_current = match.current
+    item.installment_total = match.total
+  }
+  return item
 }
 
 interface SheetRow {
