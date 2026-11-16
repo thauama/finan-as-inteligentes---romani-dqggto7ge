@@ -181,10 +181,10 @@ export default function BillsPage() {
             type="button"
             className="btn-secondary text-xs sm:text-sm"
             onClick={() => setImportOpen(true)}
-            title="Importar fatura de cartão ou extrato em PDF"
+            title="Importar fatura de cartão ou extrato em PDF, Excel ou CSV"
           >
             <Upload className="h-4 w-4 text-fin-primary" />
-            Importar PDF
+            Importar PDF, Excel ou CSV
           </button>
           <button
             className="btn-primary"

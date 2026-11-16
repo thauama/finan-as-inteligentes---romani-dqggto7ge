@@ -29,8 +29,11 @@ export class SheetImportError extends Error {
   }
 }
 
-const HEADER_ALIASES: Record<'date' | 'description' | 'amount' | 'credit' | 'debit', string[]> = {
-  date: ['data', 'date', 'dia', ' lançamento', 'data lancamento', 'data lançamento'],
+const HEADER_ALIASES: Record<
+  'date' | 'description' | 'amount' | 'credit' | 'debit' | 'type',
+  string[]
+> = {
+  date: ['data', 'date', 'dia', 'data lancamento', 'data lançamento'],
   description: [
     'descrição',
     'descricao',
@@ -295,14 +298,9 @@ function processRow(
   }
 
   // Caso 2: coluna de valor única + (opcional) coluna de tipo.
-  let explicitType = normalizeTypeCell(cells[cols.amount !== undefined ? -1 : -1])
-  const typeColumn = cols.credit !== undefined && cols.debit === undefined ? undefined : undefined
-  void typeColumn
+  let explicitType = cols.type !== undefined ? normalizeTypeCell(cells[cols.type]) : ''
   const amount = parseAmountCell(amountCell)
-  if (amount === null) {
-    // Caso 3: sem coluna de valor parseável — tenta a coluna de tipo como valor.
-    return null
-  }
+  if (amount === null) return null
   // Se a descrição OU o valor carregam a palavra (ex.: "Pagamento -5.480,76"),
   // tenta inferir da descrição; senão, sinal do valor.
   const fromDescription = normalizeTypeCell(description)

@@ -258,9 +258,13 @@ export default function TransactionsPage() {
             <Download className="h-4 w-4" />
             Exportar CSV
           </button>
-          <button className="btn-secondary" onClick={() => setImportOpen(true)}>
+          <button
+            className="btn-secondary"
+            onClick={() => setImportOpen(true)}
+            title="Importar fatura de cartão ou extrato em PDF, Excel ou CSV"
+          >
             <Upload className="h-4 w-4" />
-            Importar PDF
+            Importar PDF, Excel ou CSV
           </button>
           <button
             className="btn-primary"
