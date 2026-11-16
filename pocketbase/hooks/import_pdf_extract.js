@@ -75,46 +75,69 @@ routerAdd(
     })
 
     // Texto pode ser longo (cap 10 MB de PDF): mandamos apenas o começo,
-    // onde estão as transações, e avisamos se houve truncamento.
-    const textForAi = markdown.slice(0, 45000)
+    // onde estão as transações. Limite menor evita estourar o orçamento do
+    // modelo (texto de PDF custa 2-3 tokens por caractere) e o EOF do gateway.
+    let textForAi = markdown.slice(0, 24000)
+    const cappedLines = []
+    const rawLines = textForAi.split('\n')
+    for (let i = 0; i < rawLines.length; i++) {
+      const line = rawLines[i]
+      cappedLines.push(line.length > 300 ? line.slice(0, 300) : line)
+    }
+    textForAi = cappedLines.join('\n')
+
+    const systemPrompt =
+      'Você é um extrator de lançamentos financeiros de faturas de cartão de crédito e extratos bancários brasileiros. A partir do texto do documento, extraia TODOS os lançamentos (compras, pagamentos, tarifas, recebimentos/depósitos). Para cada lançamento devolva: date (AAAA-MM-DD, inferindo o ano quando a fatura indicar o mês/ano e para dezembro/janeiro), description (nome do estabelecimento, limpo), amount (sempre POSITIVO, em reais, número), type ("despesa" para compras/pagamentos e "receita" para recebimentos, estornos, pagamentos recebidos e créditos/refunds), e category_id (escolha SEMPRE entre os ids da lista de categorias disponíveis — a mais adequada pela descrição; se nenhuma combinar, use ""). Responda EXCLUSIVAMENTE com JSON válido, sem markdown, no formato {"transactions":[{"date":"AAAA-MM-DD","description":"...","amount":123.45,"type":"despesa","category_id":"..."}]}. Se o documento não contiver lançamentos, devolva {"transactions":[]}.'
+
+    const buildUserPrompt = function () {
+      return (
+        'Categorias disponíveis do usuário: ' +
+        JSON.stringify(categoryList) +
+        '\n\nTexto do documento:\n' +
+        textForAi
+      )
+    }
 
     let parsed = null
     let aiError = ''
-    try {
-      const reply = $ai.chat({
-        model: 'fast',
-        messages: [
-          {
-            role: 'system',
-            content:
-              'Você é um extrator de lançamentos financeiros de faturas de cartão de crédito e extratos bancários brasileiros. A partir do texto do documento, extraia TODOS os lançamentos (compras, pagamentos, tarifas, recebimentos/depósitos). Para cada lançamento devolva: date (AAAA-MM-DD, inferindo o ano quando a fatura indicar o mês/ano e para dezembro/janeiro), description (nome do estabelecimento, limpo), amount (sempre POSITIVO, em reais, número), type ("despesa" para compras/pagamentos e "receita" para recebimentos, estornos, pagamentos recebidos e créditos/refunds), e category_id (escolha SEMPRE entre os ids da lista de categorias disponíveis — a mais adequada pela descrição; se nenhuma combinar, use ""). Responda EXCLUSIVAMENTE com JSON válido, sem markdown, no formato {"transactions":[{"date":"AAAA-MM-DD","description":"...","amount":123.45,"type":"despesa","category_id":"..."}]}. Se o documento não contiver lançamentos, devolva {"transactions":[]}.',
-          },
-          {
-            role: 'user',
-            content:
-              'Categorias disponíveis do usuário: ' +
-              JSON.stringify(categoryList) +
-              '\n\nTexto do documento:\n' +
-              textForAi,
-          },
-        ],
-      })
-      const raw = (reply.choices[0].message.content || '').trim()
-      const firstBrace = raw.indexOf('{')
-      const lastBrace = raw.lastIndexOf('}')
-      const candidate = JSON.parse(
-        firstBrace >= 0 && lastBrace > firstBrace ? raw.slice(firstBrace, lastBrace + 1) : raw,
-      )
-      if (candidate && Array.isArray(candidate.transactions)) parsed = candidate
-    } catch (err) {
-      aiError = (err && err.message) || 'falha desconhecida'
-      console.log('import/pdf: falha na IA: ' + aiError)
+    // Duas tentativas: EOF/5xx do gateway são transitórios. Uma tentativa só
+    // falha de forma permanente quando o gateway rejeita a entrada (status 400).
+    for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+      try {
+        const reply = $ai.chat({
+          model: 'fast',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: buildUserPrompt() },
+          ],
+        })
+        const raw = (reply.choices[0].message.content || '').trim()
+        const firstBrace = raw.indexOf('{')
+        const lastBrace = raw.lastIndexOf('}')
+        const candidate = JSON.parse(
+          firstBrace >= 0 && lastBrace > firstBrace ? raw.slice(firstBrace, lastBrace + 1) : raw,
+        )
+        if (candidate && Array.isArray(candidate.transactions)) parsed = candidate
+      } catch (err) {
+        aiError = (err && err.message) || 'falha desconhecida'
+        const status = (err && err.status) || 0
+        console.log(
+          'import/pdf: falha na IA (tentativa ' +
+            (attempt + 1) +
+            ', status ' +
+            status +
+            '): ' +
+            aiError,
+        )
+        // Rejeição de entrada (texto demais, p. ex.) não melhora no retry.
+        if (status === 400) break
+      }
     }
 
     if (!parsed) {
       return e.json(502, {
         error:
-          'Não foi possível interpretar os lançamentos deste documento agora. Tente novamente em instantes.',
+          'Não foi possível interpretar os lançamentos deste documento agora. Tente novamente em instantes — se persistir, tente um PDF menor.',
         kind: 'ia',
         detail: aiError,
       })
