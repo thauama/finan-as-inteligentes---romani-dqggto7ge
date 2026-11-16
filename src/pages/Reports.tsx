@@ -34,6 +34,7 @@ import {
 
 import { useFinance } from '@/contexts/FinanceContext'
 import { useToast } from '@/hooks/use-toast'
+import { CategoryReport } from '@/components/finance/CategoryReport'
 import { brl, currentMonth, monthBounds, monthTitle, percentageChange } from '@/lib/format'
 import { generateMonthlyReport, getSavedReport } from '@/services/reports'
 import { exportTransactionsToCsv } from '@/lib/exportCsv'
@@ -41,7 +42,7 @@ import { listTransactions } from '@/services/transactions'
 import type { AiReport, Transaction } from '@/types/finance'
 import { cn } from '@/lib/utils'
 
-type ReportTab = 'geral' | 'comparativos'
+type ReportTab = 'geral' | 'comparativos' | 'categoria'
 const colors = ['#4338CA', '#047857', '#D97706', '#BE123C', '#6D28D9', '#0E7490', '#C2410C']
 
 export default function ReportsPage() {
@@ -306,6 +307,16 @@ export default function ReportsPage() {
         >
           Comparativos
         </button>
+        <button
+          onClick={() => updateParam('tab', 'categoria')}
+          className={cn(
+            'relative px-4 py-3 text-sm font-semibold text-fin-muted',
+            tab === 'categoria' &&
+              'text-fin-primary after:absolute after:bottom-[-1px] after:left-3 after:right-3 after:h-0.5 after:bg-fin-primary',
+          )}
+        >
+          Por categoria
+        </button>
       </div>
 
       <div className="hidden print:block">
@@ -315,6 +326,8 @@ export default function ReportsPage() {
 
       {loading ? (
         <ReportSkeleton />
+      ) : tab === 'categoria' ? (
+        <CategoryReport />
       ) : (
         <>
           <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 animate-fade-up stagger-1">

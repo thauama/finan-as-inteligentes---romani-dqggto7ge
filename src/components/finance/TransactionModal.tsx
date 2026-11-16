@@ -12,7 +12,8 @@ import { useFinance } from '@/contexts/FinanceContext'
 import { extractFieldErrors, getErrorMessage, type FieldErrors } from '@/lib/pocketbase/errors'
 import { todayInput, toDateInput } from '@/lib/format'
 import { createTransaction, updateTransaction } from '@/services/transactions'
-import { createTransfer } from '@/services/transfers'
+import { createTransfer, updateTransfer } from '@/services/transfers'
+import { isTransfer as transactionIsTransfer } from '@/lib/transactionTypes'
 import type { Transaction, TransactionInput, TransactionType } from '@/types/finance'
 import { CategoryTreeSelect } from '@/components/finance/CategoryTreeSelect'
 import { cn } from '@/lib/utils'
@@ -51,7 +52,7 @@ export function TransactionModal({
   const [dragging, setDragging] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const isTransfer = form.type === 'transferencia'
-  const editingTransfer = Boolean(transaction && transaction.type === 'transferencia')
+  const editingTransfer = Boolean(transaction && transactionIsTransfer(transaction))
 
   useEffect(() => {
     if (!open) return
@@ -123,21 +124,9 @@ export function TransactionModal({
     try {
       let saved: Transaction
       if (editingTransfer) {
-        // Atualiza os campos editáveis da transferência via rota atômica
-        saved = await createTransfer({
-          from_account_id: form.account,
-          to_account_id: form.destination_account || '',
-          amount: form.amount,
-          date: form.date,
-          description: form.description,
-          notes: form.notes,
-        })
-        setSaving(false)
-        onOpenChange(false)
-        return
-      }
-      if (isTransfer) {
-        saved = await createTransfer({
+        // Atualiza o MESMO lançamento (sem criar cópia) via rota dedicada
+        saved = await updateTransfer({
+          id: transaction!.id,
           from_account_id: form.account,
           to_account_id: form.destination_account || '',
           amount: form.amount,

@@ -23,8 +23,12 @@ import { CategoryTreeSelect } from '@/components/finance/CategoryTreeSelect'
 import { useFinance } from '@/contexts/FinanceContext'
 import { brl } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { confirmPdfImport, importPdf, type PdfImportDraftItem } from '@/services/pdfImport'
-import type { TransactionType } from '@/types/finance'
+import {
+  confirmPdfImport,
+  importPdf,
+  type PdfImportDraftItem,
+  type PdfImportDraftType,
+} from '@/services/pdfImport'
 
 interface PdfImportModalProps {
   open: boolean
@@ -371,7 +375,7 @@ export function PdfImportModal({
                         disabled={row.discarded}
                         onChange={(event) =>
                           updateRow(index, {
-                            type: event.target.value as TransactionType,
+                            type: event.target.value as PdfImportDraftType,
                             category_id: '',
                           })
                         }

@@ -1,6 +1,7 @@
 import type { Account, Category, Transaction } from '@/types/finance'
 import { getCategoryPath } from '@/lib/categories'
 import { formatDate } from '@/lib/format'
+import { transactionTypeLabel } from '@/lib/transactionTypes'
 
 /**
  * Escapa uma célula de CSV delimitada por ponto e vírgula (;).
@@ -40,7 +41,7 @@ export function exportTransactionsToCsv(
     const dateFormatted = formatDate(t.date)
     const categoryPath = getCategoryPath(t.category, categories)
     const accountName = accountsMap.get(t.account) || t.expand?.account?.name || 'Sem conta'
-    const typeLabel = t.type === 'receita' ? 'Receita' : 'Despesa'
+    const typeLabel = transactionTypeLabel(t)
     const valueFormatted = formatCsvAmount(t.amount)
     const notes = t.notes || ''
 
