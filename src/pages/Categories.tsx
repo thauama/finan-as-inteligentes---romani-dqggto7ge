@@ -15,6 +15,7 @@ import { CategoryModal } from '@/components/finance/CategoryModal'
 import { BudgetModal } from '@/components/finance/BudgetModal'
 import { deleteBudget, listBudgets } from '@/services/budgets'
 import type { Budget } from '@/types/finance'
+import { isInstallmentTransaction } from '@/lib/installments'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,7 +34,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useFinance } from '@/contexts/FinanceContext'
 import { useToast } from '@/hooks/use-toast'
-import { brl, currentMonth, monthBounds } from '@/lib/format'
+import { brl, currentMonth, monthBounds, monthTitle, todayInput } from '@/lib/format'
+import { CalendarClock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { deleteCategory } from '@/services/categories'
 import { listTransactions } from '@/services/transactions'
@@ -74,6 +76,9 @@ export default function CategoriesPage() {
       .catch(() => setBudgets([]))
   }
 
+  // Lançamentos futuros de parcelamento (previsão — fora do realizado do mês)
+  const [futureInstallments, setFutureInstallments] = useState<Transaction[]>([])
+
   useEffect(() => {
     const { start, next } = monthBounds(currentMonth())
     Promise.all([listTransactions(`date >= '${start}' && date < '${next}'`), listBudgets()])
@@ -82,7 +87,31 @@ export default function CategoriesPage() {
         setBudgets(budgetList)
       })
       .finally(() => setLoading(false))
+    listTransactions(`date > '${todayInput()}'`)
+      .then((records) =>
+        setFutureInstallments(
+          records.filter((t) => t.type === 'despesa' && isInstallmentTransaction(t)),
+        ),
+      )
+      .catch(() => setFutureInstallments([]))
   }, [])
+
+  const installmentForecast = useMemo(() => {
+    const byMonth = new Map<string, number>()
+    let total = 0
+    for (const t of futureInstallments) {
+      const key = t.date.slice(0, 7)
+      byMonth.set(key, (byMonth.get(key) || 0) + t.amount)
+      total += t.amount
+    }
+    return {
+      count: futureInstallments.length,
+      total,
+      months: Array.from(byMonth.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([m, amount]) => ({ month: m, amount, label: monthTitle(m) })),
+    }
+  }, [futureInstallments])
 
   const filteredRoots = useMemo(
     () =>
@@ -298,6 +327,40 @@ export default function CategoriesPage() {
       ) : (
         /* Aba de Metas de Gasto */
         <section className="animate-fade-up stagger-1 space-y-4">
+          {installmentForecast.count > 0 && (
+            <article className="fin-card p-5 border-amber-200/70 bg-amber-50/30">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-10 w-10 place-items-center rounded-xl bg-amber-100 text-amber-700">
+                    <CalendarClock className="h-5 w-5" />
+                  </span>
+                  <div>
+                    <h2 className="text-sm font-semibold">Previsão de parcelas</h2>
+                    <p className="mt-0.5 text-xs text-fin-muted">
+                      {installmentForecast.count} parcela(s) futura(s) de importações com
+                      parcelamento — fora do realizado
+                    </p>
+                  </div>
+                </div>
+                <span className="text-sm font-extrabold text-amber-800 shrink-0">
+                  {brl.format(installmentForecast.total)}
+                </span>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {installmentForecast.months.map((m) => (
+                  <span
+                    key={m.month}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-xs shadow-2xs"
+                  >
+                    <strong className="text-fin-text">{m.label}</strong>
+                    <span className="text-fin-muted">·</span>
+                    <strong className="text-amber-800">{brl.format(m.amount)}</strong>
+                  </span>
+                ))}
+              </div>
+            </article>
+          )}
+
           <div className="flex flex-col gap-2 rounded-2xl border border-fin-border bg-fin-surface/50 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <span className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-50 text-fin-primary">

@@ -9,6 +9,7 @@ import {
   LogIn,
   RotateCcw,
   Sparkles,
+  Split,
   Trash2,
   UploadCloud,
   X,
@@ -22,7 +23,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { CategoryTreeSelect } from '@/components/finance/CategoryTreeSelect'
+import { PdfImportReviewSummary } from '@/components/finance/PdfImportReviewSummary'
 import { useFinance } from '@/contexts/FinanceContext'
+import { useToast } from '@/hooks/use-toast'
 import { brl } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import {
@@ -31,6 +34,9 @@ import {
   SheetImportError,
   importSheetFile,
 } from '@/lib/importSheet'
+import { detectInstallment, futureInstallmentsCount } from '@/lib/installments'
+import { markDuplicates } from '@/lib/duplicates'
+import { listTransactions } from '@/services/transactions'
 import {
   confirmPdfImport,
   importPdf,
@@ -48,6 +54,12 @@ interface PdfImportModalProps {
 
 interface DraftRow extends PdfImportDraftItem {
   discarded: boolean
+  /** Casou com um lançamento já existente (heurística ±3 dias + valor + descrição). */
+  duplicate: boolean
+  /** Selo visível de possível duplicado (fica true mesmo se o usuário marcar de novo). */
+  duplicateFlag: boolean
+  /** false = parcelamento desmarcado: lança só a parcela atual como linha comum. */
+  installments: boolean
 }
 
 export function PdfImportModal({
@@ -58,6 +70,7 @@ export function PdfImportModal({
 }: PdfImportModalProps) {
   const { accounts, categories, refreshAll } = useFinance()
   const navigate = useNavigate()
+  const { toast } = useToast()
   const [rows, setRows] = useState<DraftRow[] | null>(null)
   const [accountId, setAccountId] = useState('')
   const [fileName, setFileName] = useState('')
@@ -142,13 +155,40 @@ export function PdfImportModal({
     if (file) validateFile(file)
   }
 
+  /**
+   * Busca lançamentos existentes do usuário para a checagem de duplicidade.
+   * Falha silenciosa: sem duplicidade marcada, a importação segue normal.
+   */
+  async function fetchExisting(): Promise<
+    Array<{ date: string; amount: number; description: string }>
+  > {
+    try {
+      const existing = await listTransactions()
+      return existing.map((tx) => ({
+        date: String(tx.date || '').slice(0, 10),
+        amount: Number(tx.amount) || 0,
+        description: String(tx.description || ''),
+      }))
+    } catch (_) {
+      return []
+    }
+  }
+
   async function extract(file: File) {
     setExtracting(true)
     setError('')
     setAuthError(false)
     try {
       const result = await importPdf(file)
-      setRows(result.draft.map((item) => ({ ...item, discarded: false })))
+      const existing = await fetchExisting()
+      setRows(
+        markDuplicates(result.draft, existing).map((item) => ({
+          ...item,
+          duplicateFlag: !!item.duplicate,
+          discarded: !!item.duplicate,
+          installments: true,
+        })),
+      )
       if (!accountId && accounts.length > 0) setAccountId(accounts[0].id)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Falha ao processar o PDF.'
@@ -178,7 +218,15 @@ export function PdfImportModal({
         )
         return
       }
-      setRows(result.draft.map((item) => ({ ...item, discarded: false })))
+      const existing = await fetchExisting()
+      setRows(
+        markDuplicates(result.draft, existing).map((item) => ({
+          ...item,
+          duplicateFlag: !!item.duplicate,
+          discarded: !!item.duplicate,
+          installments: true,
+        })),
+      )
       setSheetInfo({ read: result.rowsRead, ignored: result.rowsIgnored })
       if (!accountId && accounts.length > 0) setAccountId(accounts[0].id)
     } catch (err) {
@@ -209,11 +257,32 @@ export function PdfImportModal({
     )
   }
 
+  /** Desmarcar o parcelamento: a linha vira lançamento comum (só a parcela atual). */
+  function toggleInstallments(index: number) {
+    setRows((current) =>
+      current
+        ? current.map((row, i) => (i === index ? { ...row, installments: !row.installments } : row))
+        : current,
+    )
+  }
+
   const activeRows = (rows || []).filter((row) => !row.discarded)
   const totalAmount = activeRows.reduce(
     (sum, row) => sum + (row.type === 'despesa' ? row.amount : -row.amount),
     0,
   )
+  const futureCount = activeRows.reduce(
+    (sum, row) =>
+      sum +
+      (row.installments && row.installment_current && row.installment_total
+        ? futureInstallmentsCount({
+            current: row.installment_current,
+            total: row.installment_total,
+          })
+        : 0),
+    0,
+  )
+  const duplicateCount = (rows || []).filter((row) => row.duplicateFlag).length
 
   async function submit() {
     if (!accountId) {
@@ -242,10 +311,19 @@ export function PdfImportModal({
           amount: row.amount,
           type: row.type,
           category_id: row.category_id,
+          installment_current: row.installments ? row.installment_current || 0 : 0,
+          installment_total: row.installments ? row.installment_total || 0 : 0,
         })),
       )
       await refreshAll()
       onImported?.(result.created)
+      toast({
+        title: 'Importação concluída',
+        description:
+          result.future_created > 0
+            ? `${result.created} lançamento(s) criado(s) e ${result.future_created} parcela(s) futura(s) agendada(s).`
+            : `${result.created} lançamento(s) criado(s).`,
+      })
       handleOpenChange(false)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Falha ao criar os lançamentos.'
@@ -398,6 +476,18 @@ export function PdfImportModal({
                   </p>
                 )}
 
+                {duplicateCount > 0 && (
+                  <div className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>
+                      {duplicateCount} linha(s) parecem já estar lançadas (data próxima, mesmo valor
+                      e descrição parecida) e começam desmarcadas — marque-as só se quiser lançar de
+                      novo. É uma verificação por semelhança: dois gastos legítimos iguais podem
+                      casar, e a decisão é sua.
+                    </span>
+                  </div>
+                )}
+
                 <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
                   <label className="block space-y-1.5">
                     <span className="text-[13px] font-medium text-fin-text">
@@ -417,19 +507,16 @@ export function PdfImportModal({
                       ))}
                     </select>
                   </label>
-                  <div className="rounded-xl bg-fin-surface px-4 py-2.5 text-right">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-fin-muted">
-                      {activeRows.length} lançamento(s)
-                    </p>
-                    <p
-                      className={cn(
-                        'text-sm font-extrabold',
-                        totalAmount > 0 ? 'text-rose-800' : 'text-emerald-800',
-                      )}
-                    >
-                      {totalAmount >= 0 ? '−' : '+'} {brl.format(Math.abs(totalAmount))}
-                    </p>
-                  </div>
+                  <PdfImportReviewSummary
+                    count={activeRows.length}
+                    total={(rows || []).length}
+                    futureInstallments={futureCount}
+                    duplicates={duplicateCount}
+                    totalFormatted={`${
+                      totalAmount >= 0 ? '−' : '+'
+                    } ${brl.format(Math.abs(totalAmount))}`}
+                    isNegative={totalAmount > 0}
+                  />
                 </div>
 
                 {error && (
@@ -440,111 +527,182 @@ export function PdfImportModal({
                 )}
 
                 <div className="space-y-3">
-                  {rows.map((row, index) => (
-                    <div
-                      key={index}
-                      className={cn(
-                        'rounded-xl border p-3 transition',
-                        row.discarded
-                          ? 'border-fin-border bg-fin-surface opacity-50'
-                          : 'border-fin-border bg-white',
-                      )}
-                    >
-                      <div className="grid gap-2 sm:grid-cols-[110px_1fr_130px_auto]">
-                        <label className="block space-y-1">
-                          <span className="text-[11px] font-medium text-fin-muted">Data</span>
-                          <div className="relative">
-                            <CalendarDays className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-fin-muted" />
+                  {rows.map((row, index) => {
+                    const match =
+                      row.installment_current && row.installment_total
+                        ? {
+                            current: row.installment_current,
+                            total: row.installment_total,
+                          }
+                        : detectInstallment(row.description)
+                    return (
+                      <div
+                        key={index}
+                        className={cn(
+                          'rounded-xl border p-3 transition',
+                          row.discarded
+                            ? 'border-fin-border bg-fin-surface opacity-50'
+                            : 'border-fin-border bg-white',
+                        )}
+                      >
+                        <div className="grid gap-2 sm:grid-cols-[110px_1fr_130px_auto]">
+                          <label className="block space-y-1">
+                            <span className="text-[11px] font-medium text-fin-muted">Data</span>
+                            <div className="relative">
+                              <CalendarDays className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-fin-muted" />
+                              <input
+                                type="date"
+                                className="field py-1.5 pl-8 text-xs"
+                                value={row.date}
+                                disabled={row.discarded}
+                                onChange={(event) => updateRow(index, { date: event.target.value })}
+                              />
+                            </div>
+                          </label>
+                          <label className="block space-y-1">
+                            <span className="text-[11px] font-medium text-fin-muted">
+                              Descrição
+                            </span>
                             <input
-                              type="date"
-                              className="field py-1.5 pl-8 text-xs"
-                              value={row.date}
+                              className="field py-1.5 text-xs"
+                              value={row.description}
                               disabled={row.discarded}
-                              onChange={(event) => updateRow(index, { date: event.target.value })}
+                              onChange={(event) =>
+                                updateRow(index, { description: event.target.value })
+                              }
                             />
+                          </label>
+                          <label className="block space-y-1">
+                            <span className="text-[11px] font-medium text-fin-muted">
+                              Valor (R$)
+                            </span>
+                            <input
+                              type="number"
+                              min="0.01"
+                              step="0.01"
+                              className="field py-1.5 text-xs"
+                              value={row.amount || ''}
+                              disabled={row.discarded}
+                              onChange={(event) =>
+                                updateRow(index, { amount: Number(event.target.value) })
+                              }
+                            />
+                          </label>
+                          <div className="flex items-end justify-end">
+                            <button
+                              type="button"
+                              title={row.discarded ? 'Restaurar linha' : 'Descartar linha'}
+                              onClick={() => toggleDiscard(index)}
+                              className={cn(
+                                'rounded-lg p-2 transition',
+                                row.discarded
+                                  ? 'text-fin-primary hover:bg-indigo-50'
+                                  : 'text-fin-muted hover:bg-red-50 hover:text-fin-danger',
+                              )}
+                            >
+                              {row.discarded ? (
+                                <RotateCcw className="h-4 w-4" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </button>
                           </div>
-                        </label>
-                        <label className="block space-y-1">
-                          <span className="text-[11px] font-medium text-fin-muted">Descrição</span>
-                          <input
-                            className="field py-1.5 text-xs"
-                            value={row.description}
-                            disabled={row.discarded}
-                            onChange={(event) =>
-                              updateRow(index, { description: event.target.value })
-                            }
-                          />
-                        </label>
-                        <label className="block space-y-1">
-                          <span className="text-[11px] font-medium text-fin-muted">Valor (R$)</span>
-                          <input
-                            type="number"
-                            min="0.01"
-                            step="0.01"
-                            className="field py-1.5 text-xs"
-                            value={row.amount || ''}
-                            disabled={row.discarded}
-                            onChange={(event) =>
-                              updateRow(index, { amount: Number(event.target.value) })
-                            }
-                          />
-                        </label>
-                        <div className="flex items-end justify-end">
-                          <button
-                            type="button"
-                            title={row.discarded ? 'Restaurar linha' : 'Descartar linha'}
-                            onClick={() => toggleDiscard(index)}
+                        </div>
+                        <div className="mt-2 grid gap-2 sm:grid-cols-[130px_1fr]">
+                          <label className="block space-y-1">
+                            <span className="text-[11px] font-medium text-fin-muted">Tipo</span>
+                            <select
+                              className="field py-1.5 text-xs"
+                              value={row.type}
+                              disabled={row.discarded}
+                              onChange={(event) =>
+                                updateRow(index, {
+                                  type: event.target.value as PdfImportDraftType,
+                                  category_id: '',
+                                })
+                              }
+                            >
+                              <option value="despesa">Despesa</option>
+                              <option value="receita">Receita</option>
+                            </select>
+                          </label>
+                          <label className="block space-y-1">
+                            <span className="text-[11px] font-medium text-fin-muted">
+                              Categoria
+                            </span>
+                            <CategoryTreeSelect
+                              categories={categories}
+                              type={row.type}
+                              value={row.category_id}
+                              disabled={row.discarded}
+                              onChange={(categoryId) =>
+                                updateRow(index, { category_id: categoryId })
+                              }
+                              placeholder={
+                                row.category_name
+                                  ? `Sugerido: ${row.category_name}`
+                                  : 'Selecione a categoria...'
+                              }
+                            />
+                          </label>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          {match && (
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold',
+                                row.installments
+                                  ? 'bg-indigo-50 text-indigo-700'
+                                  : 'bg-fin-surface text-fin-muted',
+                              )}
+                            >
+                              <Split className="h-3 w-3" />
+                              {match.current}/{match.total} → {futureInstallmentsCount(match)}{' '}
+                              parcela(s) futura(s)
+                            </span>
+                          )}
+                          {row.duplicateFlag && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                              <AlertTriangle className="h-3 w-3" />
+                              Possível duplicado
+                            </span>
+                          )}
+                          <label
                             className={cn(
-                              'rounded-lg p-2 transition',
-                              row.discarded
-                                ? 'text-fin-primary hover:bg-indigo-50'
-                                : 'text-fin-muted hover:bg-red-50 hover:text-fin-danger',
+                              'ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-fin-muted',
+                              row.discarded && 'pointer-events-none opacity-50',
                             )}
+                            title="Desmarque para lançar só esta parcela, sem as futuras"
                           >
-                            {row.discarded ? (
-                              <RotateCcw className="h-4 w-4" />
-                            ) : (
-                              <Trash2 className="h-4 w-4" />
+                            <input
+                              type="checkbox"
+                              className="h-3.5 w-3.5 accent-indigo-600"
+                              checked={row.installments}
+                              disabled={row.discarded}
+                              onChange={() => toggleInstallments(index)}
+                            />
+                            Criar parcelas futuras
+                          </label>
+                          <label
+                            className={cn(
+                              'flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-fin-muted',
+                              row.discarded && 'pointer-events-none opacity-50',
                             )}
-                          </button>
+                            title="Marque para lançar mesmo parecendo duplicado"
+                          >
+                            <input
+                              type="checkbox"
+                              className="h-3.5 w-3.5 accent-indigo-600"
+                              checked={!row.discarded}
+                              disabled={row.discarded}
+                              onChange={() => toggleDiscard(index)}
+                            />
+                            Incluir no envio
+                          </label>
                         </div>
                       </div>
-                      <div className="mt-2 grid gap-2 sm:grid-cols-[130px_1fr]">
-                        <label className="block space-y-1">
-                          <span className="text-[11px] font-medium text-fin-muted">Tipo</span>
-                          <select
-                            className="field py-1.5 text-xs"
-                            value={row.type}
-                            disabled={row.discarded}
-                            onChange={(event) =>
-                              updateRow(index, {
-                                type: event.target.value as PdfImportDraftType,
-                                category_id: '',
-                              })
-                            }
-                          >
-                            <option value="despesa">Despesa</option>
-                            <option value="receita">Receita</option>
-                          </select>
-                        </label>
-                        <label className="block space-y-1">
-                          <span className="text-[11px] font-medium text-fin-muted">Categoria</span>
-                          <CategoryTreeSelect
-                            categories={categories}
-                            type={row.type}
-                            value={row.category_id}
-                            disabled={row.discarded}
-                            onChange={(categoryId) => updateRow(index, { category_id: categoryId })}
-                            placeholder={
-                              row.category_name
-                                ? `Sugerido: ${row.category_name}`
-                                : 'Selecione a categoria...'
-                            }
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
 
                 <div className="flex justify-end gap-3 border-t border-fin-border pt-4">
@@ -571,6 +729,7 @@ export function PdfImportModal({
                       <>
                         <Check className="h-4 w-4" />
                         Confirmar {activeRows.length} lançamento(s)
+                        {futureCount > 0 ? ` + ${futureCount} parcela(s) futura(s)` : ''}
                       </>
                     )}
                   </button>

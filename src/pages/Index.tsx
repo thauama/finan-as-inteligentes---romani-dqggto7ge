@@ -42,7 +42,16 @@ import { useFinance } from '@/contexts/FinanceContext'
 import { useCountUp } from '@/hooks/use-count-up'
 import { useRealtime } from '@/hooks/use-realtime'
 import { useToast } from '@/hooks/use-toast'
-import { brl, currentMonth, daysUntil, formatDate, monthBounds } from '@/lib/format'
+import {
+  brl,
+  currentMonth,
+  daysUntil,
+  formatDate,
+  monthBounds,
+  monthTitle,
+  todayInput,
+} from '@/lib/format'
+import { isInstallmentTransaction } from '@/lib/installments'
 import { listBills } from '@/services/bills'
 import { listBudgets } from '@/services/budgets'
 import { listRecurringTransactions } from '@/services/recurring'
@@ -313,6 +322,41 @@ export default function Index() {
     .filter((bill) => bill.status !== 'pago')
     .sort((a, b) => a.due_date.localeCompare(b.due_date))
     .slice(0, 5)
+
+  // Previsão de parcelas: lançamentos FUTUROS criados pela importação com
+  // parcelamento (nota "parcela N/M" ou agrupamento "#P..."), fora do realizado.
+  const installmentForecast = useMemo(() => {
+    const today = todayInput()
+    const future = transactions.filter(
+      (t) =>
+        t.type === 'despesa' &&
+        t.date > today &&
+        isInstallmentTransaction(t) &&
+        !t.notes?.includes('Realizado'),
+    )
+    const byMonth = new Map<string, number>()
+    let total = 0
+    let count = 0
+    for (const t of future) {
+      const key = t.date.slice(0, 7)
+      byMonth.set(key, (byMonth.get(key) || 0) + t.amount)
+      total += t.amount
+      count++
+    }
+    return {
+      count,
+      total,
+      months: Array.from(byMonth.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .slice(0, 6)
+        .map(([m, amount]) => ({
+          month: m,
+          amount,
+          label: monthTitle(m),
+        })),
+    }
+  }, [transactions])
+
   const firstName = String(user?.name || 'Usuário').split(' ')[0]
 
   function openBill(direction: BillDirection) {
@@ -609,6 +653,41 @@ export default function Index() {
           </div>
         )}
       </article>
+
+      {/* Previsão de parcelas (fora do realizado) */}
+      {installmentForecast.count > 0 && (
+        <article className="fin-card animate-fade-up stagger-3 p-5 sm:p-6 border-amber-200/70 bg-amber-50/30">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="grid h-10 w-10 place-items-center rounded-xl bg-amber-100 text-amber-700">
+                <Repeat className="h-5 w-5" />
+              </span>
+              <div>
+                <h2 className="section-title">Previsão de parcelas</h2>
+                <p className="mt-0.5 text-xs text-fin-muted">
+                  {installmentForecast.count} parcela(s) futura(s) de importações com parcelamento —
+                  fora do realizado
+                </p>
+              </div>
+            </div>
+            <span className="text-sm font-extrabold text-amber-800 shrink-0">
+              {brl.format(installmentForecast.total)}
+            </span>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {installmentForecast.months.map((m) => (
+              <span
+                key={m.month}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-xs shadow-2xs"
+              >
+                <strong className="text-fin-text">{m.label}</strong>
+                <span className="text-fin-muted">·</span>
+                <strong className="text-amber-800">{brl.format(m.amount)}</strong>
+              </span>
+            ))}
+          </div>
+        </article>
+      )}
 
       <section className="grid gap-5 lg:grid-cols-2">
         <article className="fin-card animate-fade-up stagger-2 p-5 sm:p-6">

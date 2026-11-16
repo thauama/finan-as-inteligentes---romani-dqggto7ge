@@ -134,7 +134,7 @@ export async function importPdf(
       draft: (raw?.draft || []).map((item) => ({
         ...item,
         type: (item.type === 'receita' ? 'receita' : 'despesa') as PdfImportDraftType,
-      })),
+      })) as PdfImportDraftItem[],
     }
   } catch (err) {
     throw toPdfImportError(err)
