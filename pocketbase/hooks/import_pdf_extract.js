@@ -12,9 +12,12 @@
 // 2. Parse tolerante MAIS forte: se o JSON vier truncado no meio de um item,
 //    repara fechando o item, o array e o objeto ("...}}, {"transactions":[' →
 //    '{"transactions":[…]}) em vez de descartar o chunk.
-// 3. Log por chunk (itens brutos e aceitos) para diagnosticar cortes.
-// 4. Mensagens honestas: "ok=N de M, extraído 0" ≠ "nenhum trecho respondeu".
-// Se um chunk falha, os outros ainda entram no rascunho (falha parcial ≠ total).
+// 3. SPLIT RECURSIVO (v0.0.13): chunk que falha nas 2 tentativas (EOF len=0) é
+//    dividido ao meio (overlap 300) e cada metade tenta de novo, até o piso de
+//    1.200 chars — o EOF é determinístico, retry simples nunca resolve.
+// 4. Log por chunk/subchunk (itens brutos e aceitos) para diagnosticar cortes.
+// 5. Mensagens honestas: "ok=N de M, extraído 0" ≠ "nenhum trecho respondeu".
+// Chunks que respondem nunca são descartados (falha parcial ≠ total).
 routerAdd(
   'POST',
   '/backend/v1/import/pdf',
@@ -216,8 +219,8 @@ routerAdd(
         const parsed = parseTransactionsReply(raw)
         if (!parsed) {
           console.log(
-            'import/pdf: chunk ' +
-              (chunkIndex + 1) +
+            'import/pdf: ' +
+              chunkIndex +
               ' tentativa ' +
               attempt +
               ' devolveu resposta não-parseável (len=' +
@@ -228,8 +231,8 @@ routerAdd(
         return parsed
       } catch (err) {
         console.log(
-          'import/pdf: falha na IA (chunk ' +
-            (chunkIndex + 1) +
+          'import/pdf: falha na IA (' +
+            chunkIndex +
             ', tentativa ' +
             attempt +
             ', status ' +
@@ -241,68 +244,113 @@ routerAdd(
       }
     }
 
-    const chunks = []
+    // ── Split do texto em chunks iniciais de ~4k chars ─────────────────────────
+    const initialChunks = []
     for (let start = 0; start < fullText.length; start += CHUNK_SIZE - CHUNK_OVERLAP) {
-      chunks.push(fullText.slice(start, start + CHUNK_SIZE))
+      initialChunks.push(fullText.slice(start, start + CHUNK_SIZE))
       if (start + CHUNK_SIZE >= fullText.length) break
     }
 
-    // ── Extração em chunks, com dedup e merge ────────────────────────────────
-    // Cada chunk é processado com até 2 tentativas; se um chunk falha nas duas,
-    // os outros ainda alimentam o rascunho (falha parcial ≠ falha total).
+    // ── Extração com SPLIT RECURSIVO ──────────────────────────────────────────
+    // O EOF do gateway é determinístico (>~24k chars no payload total): retry
+    // simples NUNCA resolve. Se um chunk falha nas 2 tentativas (len=0/EOF),
+    // ele é dividido ao meio (com overlap) e cada metade tenta de novo, até o
+    // piso de MIN_CHUNK chars. Chunks que respondem nunca são descartados.
+    const MIN_CHUNK = 1200
+
+    const mergeTransactions = function (chunkParsed) {
+      let okCount = 0
+      for (let j = 0; j < chunkParsed.transactions.length; j++) {
+        const t = chunkParsed.transactions[j] || {}
+        const amount = Number(t.amount)
+        const type = t.type === 'receita' ? 'receita' : 'despesa'
+        const description = String(t.description || '').trim()
+        let date = String(t.date || '').trim()
+        let categoryId = String(t.category_id || '').trim()
+        if (categoriesById[categoryId] && categoriesById[categoryId].type !== type) {
+          categoryId = ''
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) date = ''
+        if (!description || !isFinite(amount) || amount <= 0 || !date) continue
+        const key = date + '|' + description.toLowerCase() + '|' + Math.round(amount * 100)
+        if (seen[key]) continue
+        seen[key] = true
+        merged.push({
+          date: date,
+          description: description.slice(0, 200),
+          amount: Math.round(amount * 100) / 100,
+          type: type,
+          category_id: categoriesById[categoryId] ? categoryId : '',
+          category_name: categoriesById[categoryId] ? categoriesById[categoryId].name : '',
+        })
+        okCount++
+      }
+      return okCount
+    }
+
     const seen = {}
     const merged = []
     const chunkErrors = []
     let processedChunks = 0
-    let acceptedItems = 0
-    for (let i = 0; i < chunks.length; i++) {
-      let chunkParsed = null
-      for (let attempt = 1; attempt <= 2 && !chunkParsed; attempt++) {
-        chunkParsed = callAiForChunk(chunks[i], attempt, i)
+    let okSubchunks = 0
+    let totalSubchunks = 0
+
+    const splitAndProcess = function (chunkText, depth, parentLabel) {
+      totalSubchunks++
+      let parsed = null
+      for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
+        parsed = callAiForChunk(chunkText, attempt, parentLabel)
       }
-      if (chunkParsed) {
+      if (parsed) {
         processedChunks++
-        let okCount = 0
-        for (let j = 0; j < chunkParsed.transactions.length; j++) {
-          const t = chunkParsed.transactions[j] || {}
-          const amount = Number(t.amount)
-          const type = t.type === 'receita' ? 'receita' : 'despesa'
-          const description = String(t.description || '').trim()
-          let date = String(t.date || '').trim()
-          let categoryId = String(t.category_id || '').trim()
-          if (categoriesById[categoryId] && categoriesById[categoryId].type !== type) {
-            categoryId = ''
-          }
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) date = ''
-          if (!description || !isFinite(amount) || amount <= 0 || !date) continue
-          const key = date + '|' + description.toLowerCase() + '|' + Math.round(amount * 100)
-          if (seen[key]) continue
-          seen[key] = true
-          merged.push({
-            date: date,
-            description: description.slice(0, 200),
-            amount: Math.round(amount * 100) / 100,
-            type: type,
-            category_id: categoriesById[categoryId] ? categoryId : '',
-            category_name: categoriesById[categoryId] ? categoriesById[categoryId].name : '',
-          })
-          okCount++
-        }
-        acceptedItems += okCount
-        console.log('import/pdf: chunk ' + (i + 1) + '/' + chunks.length + ' → itens=' + okCount)
-      } else {
-        chunkErrors.push('chunk ' + (i + 1) + ' de ' + chunks.length)
-        console.log('import/pdf: chunk ' + (i + 1) + '/' + chunks.length + ' FALHOU (2 tentativas)')
+        const okCount = mergeTransactions(parsed)
+        okSubchunks++
+        console.log(
+          'import/pdf: ' + parentLabel + ' → itens=' + okCount + ' (profundidade ' + depth + ')',
+        )
+        return
       }
+      const half = Math.floor(chunkText.length / 2)
+      if (chunkText.length <= MIN_CHUNK || half < 1) {
+        console.log(
+          'import/pdf: ' + parentLabel + ' FALHOU no piso (' + chunkText.length + ' chars)',
+        )
+        chunkErrors.push(parentLabel)
+        return
+      }
+      // Divide ao meio com overlap e processa cada metade recursivamente.
+      const left = chunkText.slice(0, half + CHUNK_OVERLAP)
+      const right = chunkText.slice(half - CHUNK_OVERLAP >= 0 ? half - CHUNK_OVERLAP : 0)
+      console.log(
+        'import/pdf: ' +
+          parentLabel +
+          ' FALHOU — dividindo ' +
+          chunkText.length +
+          ' chars em ' +
+          left.length +
+          '+' +
+          right.length +
+          ' (profundidade ' +
+          (depth + 1) +
+          ')',
+      )
+      splitAndProcess(left, depth + 1, parentLabel + '.a')
+      splitAndProcess(right, depth + 1, parentLabel + '.b')
+    }
+
+    for (let i = 0; i < initialChunks.length; i++) {
+      splitAndProcess(initialChunks[i], 0, 'chunk ' + (i + 1) + '/' + initialChunks.length)
     }
 
     console.log(
-      'import/pdf: chunks=' +
-        chunks.length +
+      'import/pdf: chunks_iniciais=' +
+        initialChunks.length +
+        ', subchunks=' +
+        totalSubchunks +
         ', ok=' +
-        processedChunks +
+        okSubchunks +
         ', lançamentos=' +
-        acceptedItems +
+        merged.length +
         ' (dedup=' +
         merged.length +
         ')',
@@ -310,18 +358,18 @@ routerAdd(
 
     if (merged.length === 0) {
       if (chunkErrors.length > 0 && processedChunks > 0) {
-        // Alguns chunks responderam, mas nenhum lançamento veio deles.
+        // Alguns trechos responderam, mas nenhum lançamento veio deles.
         return e.json(502, {
           error:
             'A leitura falhou parcialmente: ' +
-            processedChunks +
+            okSubchunks +
             ' de ' +
-            chunks.length +
+            totalSubchunks +
             ' trechos foram lidos, mas nenhum lançamento foi extraído (' +
             chunkErrors.join(', ') +
             ' falharam). Tente novamente; se persistir, o documento pode ter um formato não suportado.',
           kind: 'ia',
-          detail: 'Chunks lidos: ' + processedChunks + '/' + chunks.length + '; extraído: 0',
+          detail: 'Trechos lidos: ' + okSubchunks + '/' + totalSubchunks + '; extraído: 0',
         })
       }
       if (chunkErrors.length > 0) {
@@ -347,8 +395,8 @@ routerAdd(
       draft: merged,
       truncated: truncated,
       total: merged.length,
-      chunks_ok: processedChunks,
-      chunks_total: chunks.length,
+      chunks_ok: okSubchunks,
+      chunks_total: totalSubchunks,
     })
   },
   $apis.requireAuth(),

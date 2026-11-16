@@ -26,6 +26,12 @@ import { useFinance } from '@/contexts/FinanceContext'
 import { brl } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import {
+  IMPORT_SHEET_MAX_BYTES,
+  IMPORT_SHEET_MAX_ROWS,
+  SheetImportError,
+  importSheetFile,
+} from '@/lib/importSheet'
+import {
   confirmPdfImport,
   importPdf,
   PdfImportError,
@@ -59,6 +65,8 @@ export function PdfImportModal({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [authError, setAuthError] = useState(false)
+  const [kind, setKind] = useState<'pdf' | 'sheet'>('pdf')
+  const [sheetInfo, setSheetInfo] = useState<{ read: number; ignored: number } | null>(null)
 
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -70,6 +78,8 @@ export function PdfImportModal({
     setAuthError(false)
     setExtracting(false)
     setSaving(false)
+    setKind('pdf')
+    setSheetInfo(null)
   }
 
   function handleOpenChange(next: boolean) {
@@ -85,21 +95,45 @@ export function PdfImportModal({
     setAuthError(true)
   }
 
+  const SHEET_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.txt']
+
   function validateFile(file: File) {
-    if (file.type && file.type !== 'application/pdf') {
-      setError('Envie um arquivo PDF (fatura de cartão ou extrato bancário).')
-      setAuthError(false)
-      return
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      setError('O PDF deve ter no máximo 10 MB.')
-      setAuthError(false)
-      return
-    }
     setError('')
     setAuthError(false)
-    setFileName(file.name)
-    void extract(file)
+    const lowerName = file.name.toLowerCase()
+    const isSheet = SHEET_EXTENSIONS.some((extension) => lowerName.endsWith(extension))
+    const isPdf = file.type === 'application/pdf' || lowerName.endsWith('.pdf')
+
+    if (!isSheet && !isPdf && file.type) {
+      setError('Envie um PDF, Excel (.xlsx) ou CSV da fatura ou extrato.')
+      setAuthError(false)
+      return
+    }
+    if (isPdf) {
+      if (file.size > 10 * 1024 * 1024) {
+        setError('O PDF deve ter no máximo 10 MB.')
+        return
+      }
+      setKind('pdf')
+      setSheetInfo(null)
+      setFileName(file.name)
+      void extract(file)
+      return
+    }
+    if (isSheet) {
+      if (file.size > IMPORT_SHEET_MAX_BYTES) {
+        setError(
+          `A planilha deve ter no máximo ${Math.round(IMPORT_SHEET_MAX_BYTES / (1024 * 1024))} MB (o arquivo tem ${(file.size / (1024 * 1024)).toFixed(1)} MB).`,
+        )
+        return
+      }
+      setKind('sheet')
+      setSheetInfo(null)
+      setFileName(file.name)
+      void extractSheet(file)
+      return
+    }
+    setError('Envie um PDF, Excel (.xlsx) ou CSV da fatura ou extrato.')
   }
 
   function handleDrop(event: DragEvent<HTMLButtonElement>) {
@@ -124,6 +158,38 @@ export function PdfImportModal({
         setRows(null)
         setError(message)
       }
+    } finally {
+      setExtracting(false)
+    }
+  }
+
+  /** Excel/CSV: leitura direta das linhas no cliente, sem IA. */
+  async function extractSheet(file: File) {
+    setExtracting(true)
+    setError('')
+    setAuthError(false)
+    try {
+      const result = await importSheetFile(file, categories)
+      if (result.draft.length === 0) {
+        setRows(null)
+        setFileName('')
+        setError(
+          `Nenhuma linha com data e valor válidos foi encontrada (${result.rowsRead} linha(s) lida(s), ${result.rowsIgnored} ignorada(s)). Verifique se a planilha tem as colunas "Data", "Descrição" e "Valor".`,
+        )
+        return
+      }
+      setRows(result.draft.map((item) => ({ ...item, discarded: false })))
+      setSheetInfo({ read: result.rowsRead, ignored: result.rowsIgnored })
+      if (!accountId && accounts.length > 0) setAccountId(accounts[0].id)
+    } catch (err) {
+      const message =
+        err instanceof SheetImportError
+          ? err.message
+          : 'Não foi possível ler a planilha. Verifique o arquivo e tente novamente.'
+      setRows(null)
+      setFileName('')
+      setSheetInfo(null)
+      setError(message)
     } finally {
       setExtracting(false)
     }
@@ -199,11 +265,11 @@ export function PdfImportModal({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-fin-primary" />
-            Importar fatura ou extrato (PDF)
+            Importar fatura ou extrato (PDF, Excel ou CSV)
           </DialogTitle>
           <DialogDescription>
-            Anexe o PDF da fatura de cartão ou do extrato bancário. A leitura é feita por IA e os
-            lançamentos aparecem abaixo como rascunho — nada é lançado antes da sua confirmação.
+            Anexe o PDF da fatura de cartão, o extrato em Excel (.xlsx) ou CSV. Os lançamentos
+            aparecem abaixo como rascunho editável — nada é lançado antes da sua confirmação.
           </DialogDescription>
         </DialogHeader>
 
@@ -265,19 +331,22 @@ export function PdfImportModal({
                   {extracting ? (
                     <>
                       <span className="text-sm font-semibold text-fin-text">
-                        Lendo o PDF com IA...
+                        {kind === 'pdf' ? 'Lendo o PDF com IA...' : 'Lendo a planilha...'}
                       </span>
                       <span className="mt-1 text-xs text-fin-muted">
-                        Isso pode levar alguns segundos.
+                        {kind === 'pdf'
+                          ? 'Isso pode levar alguns segundos.'
+                          : 'Lendo as linhas do arquivo...'}
                       </span>
                     </>
                   ) : (
                     <>
                       <span className="text-sm font-semibold text-fin-text">
-                        {fileName || 'Clique ou arraste o PDF da fatura/extrato'}
+                        {fileName || 'Clique ou arraste o PDF, Excel ou CSV da fatura/extrato'}
                       </span>
                       <span className="mt-1 text-xs text-fin-muted">
-                        PDF com texto selecionável, até 10 MB
+                        PDF com texto selecionável (até 10 MB) · Excel/CSV até 5 MB e{' '}
+                        {IMPORT_SHEET_MAX_ROWS.toLocaleString('pt-BR')} linhas
                       </span>
                     </>
                   )}
@@ -285,7 +354,7 @@ export function PdfImportModal({
                 <input
                   ref={fileRef}
                   type="file"
-                  accept="application/pdf"
+                  accept="application/pdf,.xlsx,.xls,.csv,.txt"
                   className="hidden"
                   onChange={(event) => {
                     const file = event.target.files?.[0]
@@ -322,6 +391,13 @@ export function PdfImportModal({
 
             {rows && (
               <div className="space-y-4 pt-2">
+                {sheetInfo && (
+                  <p className="text-xs text-fin-muted">
+                    {sheetInfo.read} linha(s) lida(s), {sheetInfo.ignored} ignorada(s) (sem data,
+                    valor ou duplicadas).
+                  </p>
+                )}
+
                 <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
                   <label className="block space-y-1.5">
                     <span className="text-[13px] font-medium text-fin-text">
