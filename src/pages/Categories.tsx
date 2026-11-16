@@ -141,33 +141,19 @@ export default function CategoriesPage() {
 
   // Agregação de gastos para uma meta específica no mês corrente.
   // Se a meta for numa categoria raiz, soma gastos de todas as suas subcategorias também.
-  // Parcelas futuras (datas > hoje) da categoria CONTAM como realizado — o chip
-  // do cartão mostra quanto do gasto vem dessas parcelas.
-  function getBudgetSpent(budgetCategory: Category | undefined): {
-    spent: number
-    future: number
-  } {
-    if (!budgetCategory) return { spent: 0, future: 0 }
+  // Gasto realizado = APENAS o que vence no mês corrente: uma parcela conta como
+  // realizada só no mês da sua data — as de meses seguintes ficam apenas na
+  // Previsão de parcelas (sem dupla contagem).
+  function getBudgetSpent(budgetCategory: Category | undefined): number {
+    if (!budgetCategory) return 0
     const subcategoryIds = categories.filter((c) => c.parent === budgetCategory.id).map((c) => c.id)
     const allRelevantIds = [budgetCategory.id, ...subcategoryIds]
-    const today = todayInput()
-    const nextMonthStart = monthBounds(currentMonth()).next.slice(0, 10)
     let spent = 0
-    let future = 0
     for (const t of transactions) {
       if (t.type !== 'despesa' || !allRelevantIds.includes(t.category)) continue
       spent += t.amount
-      // Parcela futura da categoria: conta como realizado e é destacada no cartão.
-      if (t.date > today && isInstallmentTransaction(t)) future += t.amount
     }
-    // Parcelas de meses seguintes (fora do filtro de mês de `transactions`):
-    // também contam como realizado, sem dupla contagem com o mês corrente.
-    for (const t of futureInstallments) {
-      if (t.date < nextMonthStart || !allRelevantIds.includes(t.category)) continue
-      spent += t.amount
-      future += t.amount
-    }
-    return { spent, future }
+    return spent
   }
 
   async function confirmDeleteBudget() {
@@ -357,8 +343,8 @@ export default function CategoriesPage() {
                   <div>
                     <h2 className="text-sm font-semibold">Previsão de parcelas</h2>
                     <p className="mt-0.5 text-xs text-fin-muted">
-                      {installmentForecast.count} parcela(s) futura(s) de importações com
-                      parcelamento — já contabilizadas no realizado das metas
+                      {installmentForecast.count} parcela(s) futura(s) — contam como realizada no
+                      mês do vencimento
                     </p>
                   </div>
                 </div>
@@ -441,7 +427,7 @@ export default function CategoriesPage() {
             <div className="grid gap-4 md:grid-cols-2">
               {budgets.map((b) => {
                 const category = categories.find((c) => c.id === b.category) || b.expand?.category
-                const { spent, future } = getBudgetSpent(category)
+                const spent = getBudgetSpent(category)
                 const limit = b.monthly_limit
                 const pct = limit > 0 ? (spent / limit) * 100 : 0
                 const isOver = pct >= 100
@@ -547,11 +533,6 @@ export default function CategoriesPage() {
                         </span>
                         <span>Meta: {brl.format(limit)}</span>
                       </div>
-                      {future > 0 && (
-                        <span className="mt-1.5 block text-[11px] font-medium text-amber-700">
-                          inclui {brl.format(future)} de parcelas futuras
-                        </span>
-                      )}
                     </div>
                   </article>
                 )
