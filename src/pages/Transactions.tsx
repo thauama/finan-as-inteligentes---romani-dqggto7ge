@@ -11,10 +11,13 @@ import {
   Plus,
   Search,
   SlidersHorizontal,
+  Sparkles,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react'
 
+import { PdfImportModal } from '@/components/finance/PdfImportModal'
 import { TransactionModal } from '@/components/finance/TransactionModal'
 import {
   AlertDialog,
@@ -57,6 +60,7 @@ export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
   const [deleting, setDeleting] = useState<Transaction | null>(null)
   const [previewing, setPreviewing] = useState<Transaction | null>(null)
@@ -244,6 +248,10 @@ export default function TransactionsPage() {
           >
             <Download className="h-4 w-4" />
             Exportar CSV
+          </button>
+          <button className="btn-secondary" onClick={() => setImportOpen(true)}>
+            <Upload className="h-4 w-4" />
+            Importar PDF
           </button>
           <button
             className="btn-primary"
@@ -512,6 +520,18 @@ export default function TransactionsPage() {
         )}
       </section>
 
+      <PdfImportModal
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        defaultAccountId={account || undefined}
+        onImported={(created) => {
+          void reload()
+          toast({
+            title: `${created} lançamento(s) importado(s)`,
+            description: 'Os lançamentos do PDF foram criados na conta selecionada.',
+          })
+        }}
+      />
       <TransactionModal
         open={modalOpen}
         onOpenChange={setModalOpen}

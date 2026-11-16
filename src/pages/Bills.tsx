@@ -12,10 +12,13 @@ import {
   Pencil,
   Plus,
   Receipt,
+  Sparkles,
   Trash2,
+  Upload,
 } from 'lucide-react'
 
 import { BillModal } from '@/components/finance/BillModal'
+import { PdfImportModal } from '@/components/finance/PdfImportModal'
 import { SettleBillModal } from '@/components/finance/SettleBillModal'
 import {
   AlertDialog,
@@ -48,6 +51,7 @@ export default function BillsPage() {
   const [bills, setBills] = useState<Bill[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [editing, setEditing] = useState<Bill | null>(null)
   const [deleting, setDeleting] = useState<Bill | null>(null)
   const [settling, setSettling] = useState<Bill | null>(null)
@@ -174,6 +178,15 @@ export default function BillsPage() {
             {sendingEmail ? 'Enviando lembrete...' : 'Enviar lembretes por e-mail'}
           </button>
           <button
+            type="button"
+            className="btn-secondary text-xs sm:text-sm"
+            onClick={() => setImportOpen(true)}
+            title="Importar fatura de cartão ou extrato em PDF"
+          >
+            <Upload className="h-4 w-4 text-fin-primary" />
+            Importar PDF
+          </button>
+          <button
             className="btn-primary"
             onClick={() => {
               setEditing(null)
@@ -282,6 +295,16 @@ export default function BillsPage() {
         )}
       </section>
 
+      <PdfImportModal
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onImported={(created) => {
+          toast({
+            title: `${created} lançamento(s) importado(s)`,
+            description: 'Os lançamentos do PDF foram criados e já aparecem em Lançamentos.',
+          })
+        }}
+      />
       <BillModal
         open={modalOpen}
         onOpenChange={setModalOpen}
