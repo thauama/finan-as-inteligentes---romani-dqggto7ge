@@ -5,14 +5,18 @@
 // REGRA DO JSVM: todo o código fica INLINE dentro de cada callback —
 // nenhuma função ou variável top-level é referenciada dentro de callbacks.
 
+// IMPORTANTE: todo caminho que não lança erro DEVE chamar e.next() — sem isso
+// o PocketBase pula a escrita e o cliente fica sem resposta (bug visto em logs:
+// "served hooks can finish without calling e.next()").
+
 onRecordCreateRequest((e) => {
   const record = e.record
   if (!record || record.collection().name !== 'transactions') {
-    return
+    return e.next()
   }
   const type = record.getString('type')
   if (type !== 'transferencia') {
-    return
+    return e.next()
   }
   const destination = record.getString('destination_account')
   const account = record.getString('account')
@@ -32,12 +36,13 @@ onRecordCreateRequest((e) => {
     }
     throw new BadRequestError('Conta de destino não encontrada.')
   }
+  return e.next()
 }, 'transactions')
 
 onRecordUpdateRequest((e) => {
   const record = e.record
   if (!record || record.collection().name !== 'transactions') {
-    return
+    return e.next()
   }
   const type = record.getString('type')
   const wasTransfer = record.original().getString('type') === 'transferencia'
@@ -47,7 +52,7 @@ onRecordUpdateRequest((e) => {
     if (!wasTransfer && record.getString('destination_account')) {
       throw new BadRequestError('Use a edição da transferência para alterar a conta de destino.')
     }
-    return
+    return e.next()
   }
   const destination = record.getString('destination_account')
   const account = record.getString('account')
@@ -65,4 +70,5 @@ onRecordUpdateRequest((e) => {
     }
     throw new BadRequestError('Conta de destino não encontrada.')
   }
+  return e.next()
 }, 'transactions')

@@ -1,6 +1,6 @@
 // Confirmação da importação de fatura/extrato em PDF.
 // POST JSON /backend/v1/import/pdf/confirm
-// Body: { account_id: string, transactions: [{date, description, amount, type, category_id}] }
+// Body: { account_id: string, items: [{date, description, amount, type, category_id}] }
 // Cria lançamentos REAIS (coleção transactions), vinculados à conta e categoria
 // escolhidos na tela de revisão. Tudo dentro de uma transação: ou cria todos,
 // ou nenhum.
@@ -13,7 +13,11 @@ routerAdd(
 
     const body = e.requestInfo().body || {}
     const accountId = typeof body.account_id === 'string' ? body.account_id.trim() : ''
-    const incoming = Array.isArray(body.transactions) ? body.transactions : []
+    const incoming = Array.isArray(body.items)
+      ? body.items
+      : Array.isArray(body.transactions)
+        ? body.transactions
+        : []
 
     if (!accountId) {
       return e.badRequestError('Selecione a conta ou cartão de destino.')
@@ -37,7 +41,8 @@ routerAdd(
     }
 
     // Categorias do usuário, para validar as escolhidas na revisão.
-    const categoriesById = {}
+    // (let: o catch abaixo NÃO pode reatribuir um const — quebraria o handler.)
+    let categoriesById = {}
     try {
       const categoryRecords = $app.findRecordsByFilter(
         'categories',
