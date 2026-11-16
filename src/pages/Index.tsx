@@ -140,8 +140,7 @@ export default function Index() {
         const movement = transactions
           .filter(
             (transaction) =>
-              transaction.account === account.id ||
-              transaction.destination_account === account.id,
+              transaction.account === account.id || transaction.destination_account === account.id,
           )
           .reduce((sum, transaction) => {
             if (transaction.type === 'transferencia') {

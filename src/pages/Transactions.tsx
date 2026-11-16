@@ -615,9 +615,7 @@ function TransactionRow({
         <span className="flex items-center gap-2 font-medium">
           {transfer && <ArrowLeftRight className="h-3.5 w-3.5 shrink-0 text-fin-primary" />}
           <span className="truncate">
-            {transfer
-              ? transferLabel || transaction.description
-              : transaction.description}
+            {transfer ? transferLabel || transaction.description : transaction.description}
           </span>
           {transaction.attachment && (
             <button onClick={onPreview} className="text-fin-primary" title="Ver comprovante">
@@ -663,7 +661,8 @@ function TransactionRow({
               : 'text-rose-800'
         }`}
       >
-        {transfer ? '⇄' : transaction.type === 'receita' ? '+' : '−'} {brl.format(transaction.amount)}
+        {transfer ? '⇄' : transaction.type === 'receita' ? '+' : '−'}{' '}
+        {brl.format(transaction.amount)}
       </td>
       <td className="px-3 py-4">
         <ActionMenu onEdit={onEdit} onDelete={onDelete} />
