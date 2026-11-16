@@ -12,6 +12,7 @@ import { useFinance } from '@/contexts/FinanceContext'
 import { extractFieldErrors, getErrorMessage, type FieldErrors } from '@/lib/pocketbase/errors'
 import { todayInput, toDateInput } from '@/lib/format'
 import { createTransaction, updateTransaction } from '@/services/transactions'
+import { createTransfer } from '@/services/transfers'
 import type { Transaction, TransactionInput, TransactionType } from '@/types/finance'
 import { CategoryTreeSelect } from '@/components/finance/CategoryTreeSelect'
 import { cn } from '@/lib/utils'
@@ -49,6 +50,8 @@ export function TransactionModal({
   const [saving, setSaving] = useState(false)
   const [dragging, setDragging] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const isTransfer = form.type === 'transferencia'
+  const editingTransfer = Boolean(transaction && transaction.type === 'transferencia')
 
   useEffect(() => {
     if (!open) return
@@ -62,6 +65,7 @@ export function TransactionModal({
         date: toDateInput(transaction.date),
         category: transaction.category,
         account: transaction.account,
+        destination_account: transaction.destination_account || '',
         notes: transaction.notes || '',
         attachment: null,
       })
@@ -98,19 +102,54 @@ export function TransactionModal({
   async function submit(event: FormEvent) {
     event.preventDefault()
     const localErrors: FieldErrors = {}
-    if (!form.description.trim()) localErrors.description = 'Informe uma descrição.'
     if (!form.amount || form.amount <= 0) localErrors.amount = 'Informe um valor maior que zero.'
     if (!form.date) localErrors.date = 'Informe a data.'
-    if (!form.category) localErrors.category = 'Selecione uma categoria.'
-    if (!form.account) localErrors.account = 'Selecione uma conta.'
+    if (!form.account) localErrors.account = 'Selecione a conta de origem.'
+
+    if (isTransfer) {
+      if (!form.destination_account) {
+        localErrors.destination_account = 'Selecione a conta de destino.'
+      } else if (form.destination_account === form.account) {
+        localErrors.destination_account = 'A conta de destino deve ser diferente da origem.'
+      }
+    } else {
+      if (!form.description.trim()) localErrors.description = 'Informe uma descrição.'
+      if (!form.category) localErrors.category = 'Selecione uma categoria.'
+    }
     if (Object.keys(localErrors).length) return setErrors(localErrors)
 
     setSaving(true)
     setMessage('')
     try {
-      const saved = transaction
-        ? await updateTransaction(transaction.id, form)
-        : await createTransaction(form)
+      let saved: Transaction
+      if (editingTransfer) {
+        // Atualiza os campos editáveis da transferência via rota atômica
+        saved = await createTransfer({
+          from_account_id: form.account,
+          to_account_id: form.destination_account || '',
+          amount: form.amount,
+          date: form.date,
+          description: form.description,
+          notes: form.notes,
+        })
+        setSaving(false)
+        onOpenChange(false)
+        return
+      }
+      if (isTransfer) {
+        saved = await createTransfer({
+          from_account_id: form.account,
+          to_account_id: form.destination_account || '',
+          amount: form.amount,
+          date: form.date,
+          description: form.description,
+          notes: form.notes,
+        })
+      } else {
+        saved = transaction
+          ? await updateTransaction(transaction.id, form)
+          : await createTransaction(form)
+      }
       onSaved?.(saved)
       onOpenChange(false)
     } catch (error) {
@@ -127,12 +166,12 @@ export function TransactionModal({
         <DialogHeader>
           <DialogTitle>{transaction ? 'Editar lançamento' : 'Novo lançamento'}</DialogTitle>
           <DialogDescription>
-            Registre uma entrada ou saída e mantenha seu saldo atualizado.
+            Registre uma entrada, saída ou transferência entre contas.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-5 pt-2">
-          <div className="grid grid-cols-2 rounded-xl bg-fin-surface p-1">
-            {(['receita', 'despesa'] as const).map((type) => (
+          <div className="grid grid-cols-3 rounded-xl bg-fin-surface p-1">
+            {(['receita', 'despesa', 'transferencia'] as const).map((type) => (
               <button
                 key={type}
                 type="button"
@@ -141,15 +180,17 @@ export function TransactionModal({
                   set('category', '')
                 }}
                 className={cn(
-                  'rounded-lg px-4 py-2.5 text-sm font-semibold capitalize transition',
+                  'rounded-lg px-3 py-2.5 text-sm font-semibold transition',
                   form.type === type
                     ? type === 'receita'
                       ? 'bg-white text-fin-success shadow-sm'
-                      : 'bg-white text-fin-danger shadow-sm'
+                      : type === 'transferencia'
+                        ? 'bg-white text-fin-primary shadow-sm'
+                        : 'bg-white text-fin-danger shadow-sm'
                     : 'text-fin-muted',
                 )}
               >
-                {type}
+                {type === 'transferencia' ? 'Transferência' : type}
               </button>
             ))}
           </div>
@@ -182,41 +223,90 @@ export function TransactionModal({
             </Field>
           </div>
 
-          <Field label="Descrição" error={errors.description}>
-            <input
-              className="field"
-              value={form.description}
-              onChange={(event) => set('description', event.target.value)}
-              placeholder="Ex.: Compra no supermercado"
-              autoFocus
-            />
-          </Field>
+          {!isTransfer && (
+            <Field label="Descrição" error={errors.description}>
+              <input
+                className="field"
+                value={form.description}
+                onChange={(event) => set('description', event.target.value)}
+                placeholder="Ex.: Compra no supermercado"
+                autoFocus
+              />
+            </Field>
+          )}
 
-          <Field label="Categoria (raiz ou subcategoria)" error={errors.category}>
-            <CategoryTreeSelect
-              categories={categories}
-              type={form.type}
-              value={form.category}
-              onChange={(categoryId) => set('category', categoryId)}
-              placeholder={`Selecione a categoria de ${form.type}...`}
-              error={Boolean(errors.category)}
-            />
-          </Field>
+          {isTransfer ? (
+            <>
+              <Field label="Descrição (opcional)" error={errors.description}>
+                <input
+                  className="field"
+                  value={form.description}
+                  onChange={(event) => set('description', event.target.value)}
+                  placeholder="Ex.: Guardar dinheiro do mês"
+                />
+              </Field>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Conta de origem" error={errors.account}>
+                  <select
+                    className="field"
+                    value={form.account}
+                    onChange={(event) => set('account', event.target.value)}
+                  >
+                    <option value="">Conta de origem</option>
+                    {accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Conta de destino" error={errors.destination_account}>
+                  <select
+                    className="field"
+                    value={form.destination_account || ''}
+                    onChange={(event) => set('destination_account', event.target.value)}
+                  >
+                    <option value="">Conta de destino</option>
+                    {accounts
+                      .filter((account) => account.id !== form.account)
+                      .map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {account.name}
+                        </option>
+                      ))}
+                  </select>
+                </Field>
+              </div>
+            </>
+          ) : (
+            <>
+              <Field label="Categoria (raiz ou subcategoria)" error={errors.category}>
+                <CategoryTreeSelect
+                  categories={categories}
+                  type={form.type}
+                  value={form.category}
+                  onChange={(categoryId) => set('category', categoryId)}
+                  placeholder={`Selecione a categoria de ${form.type}...`}
+                  error={Boolean(errors.category)}
+                />
+              </Field>
 
-          <Field label="Conta" error={errors.account}>
-            <select
-              className="field"
-              value={form.account}
-              onChange={(event) => set('account', event.target.value)}
-            >
-              <option value="">Selecione a conta</option>
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.name}
-                </option>
-              ))}
-            </select>
-          </Field>
+              <Field label="Conta" error={errors.account}>
+                <select
+                  className="field"
+                  value={form.account}
+                  onChange={(event) => set('account', event.target.value)}
+                >
+                  <option value="">Selecione a conta</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </>
+          )}
 
           <Field label="Notas" error={errors.notes}>
             <textarea
@@ -227,44 +317,46 @@ export function TransactionModal({
             />
           </Field>
 
-          <Field label="Comprovante" error={errors.attachment}>
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              onDragOver={(event) => {
-                event.preventDefault()
-                setDragging(true)
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={handleDrop}
-              className={cn(
-                'flex w-full flex-col items-center rounded-xl border border-dashed px-5 py-5 text-center transition',
-                dragging
-                  ? 'border-fin-primary bg-indigo-50'
-                  : 'border-fin-border bg-fin-surface hover:border-fin-primary/50',
-              )}
-            >
-              {form.attachment ? (
-                <FileText className="mb-2 h-6 w-6 text-fin-primary" />
-              ) : (
-                <UploadCloud className="mb-2 h-6 w-6 text-fin-muted" />
-              )}
-              <span className="text-sm font-medium text-fin-text">
-                {form.attachment?.name || 'Clique ou arraste um arquivo'}
-              </span>
-              <span className="mt-1 text-xs text-fin-muted">PDF, PNG ou JPEG, até 5 MB</span>
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/pdf,image/png,image/jpeg"
-              className="hidden"
-              onChange={(event) => {
-                const file = event.target.files?.[0]
-                if (file) validateFile(file)
-              }}
-            />
-          </Field>
+          {!isTransfer && (
+            <Field label="Comprovante" error={errors.attachment}>
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                onDragOver={(event) => {
+                  event.preventDefault()
+                  setDragging(true)
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={handleDrop}
+                className={cn(
+                  'flex w-full flex-col items-center rounded-xl border border-dashed px-5 py-5 text-center transition',
+                  dragging
+                    ? 'border-fin-primary bg-indigo-50'
+                    : 'border-fin-border bg-fin-surface hover:border-fin-primary/50',
+                )}
+              >
+                {form.attachment ? (
+                  <FileText className="mb-2 h-6 w-6 text-fin-primary" />
+                ) : (
+                  <UploadCloud className="mb-2 h-6 w-6 text-fin-muted" />
+                )}
+                <span className="text-sm font-medium text-fin-text">
+                  {form.attachment?.name || 'Clique ou arraste um arquivo'}
+                </span>
+                <span className="mt-1 text-xs text-fin-muted">PDF, PNG ou JPEG, até 5 MB</span>
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="application/pdf,image/png,image/jpeg"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  if (file) validateFile(file)
+                }}
+              />
+            </Field>
+          )}
 
           {message && (
             <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-fin-danger">{message}</p>
@@ -284,7 +376,7 @@ export function TransactionModal({
               ) : (
                 <>
                   <Check className="h-4 w-4" />
-                  {transaction ? 'Salvar alterações' : 'Criar lançamento'}
+                  {editingTransfer ? 'Salvar alterações' : 'Criar lançamento'}
                 </>
               )}
             </button>

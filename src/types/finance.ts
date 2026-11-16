@@ -1,6 +1,6 @@
 import type { RecordModel } from 'pocketbase'
 
-export type TransactionType = 'receita' | 'despesa'
+export type TransactionType = 'receita' | 'despesa' | 'transferencia'
 export type AccountType = 'carteira' | 'banco' | 'cartao'
 export type BillDirection = 'pagar' | 'receber'
 export type BillStatus = 'em_aberto' | 'pago' | 'atrasado'
@@ -28,12 +28,14 @@ export interface Transaction extends RecordModel {
   date: string
   category: string
   account: string
+  destination_account?: string
   attachment?: string
   notes?: string
   user: string
   expand?: {
     category?: Category
     account?: Account
+    destination_account?: Account
   }
 }
 
@@ -119,6 +121,7 @@ export interface TransactionInput {
   date: string
   category: string
   account: string
+  destination_account?: string
   notes?: string
   attachment?: File | null
 }

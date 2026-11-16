@@ -138,12 +138,20 @@ export default function Index() {
     () =>
       accounts.map((account) => {
         const movement = transactions
-          .filter((transaction) => transaction.account === account.id)
-          .reduce(
-            (sum, transaction) =>
-              sum + (transaction.type === 'receita' ? transaction.amount : -transaction.amount),
-            0,
+          .filter(
+            (transaction) =>
+              transaction.account === account.id ||
+              transaction.destination_account === account.id,
           )
+          .reduce((sum, transaction) => {
+            if (transaction.type === 'transferencia') {
+              // Origem perde, destino recebe
+              return transaction.account === account.id
+                ? sum - transaction.amount
+                : sum + transaction.amount
+            }
+            return sum + (transaction.type === 'receita' ? transaction.amount : -transaction.amount)
+          }, 0)
         return { ...account, balance: account.initial_balance + movement }
       }),
     [accounts, transactions],
@@ -166,7 +174,8 @@ export default function Index() {
           .filter((transaction) => new Date(transaction.date.replace(' ', 'T')) <= end)
           .reduce(
             (sum, transaction) =>
-              sum + (transaction.type === 'receita' ? transaction.amount : -transaction.amount),
+              // Transferência entre contas não altera o total consolidado
+              transaction.type === 'receita' ? sum + transaction.amount : sum - transaction.amount,
             0,
           )
       return {

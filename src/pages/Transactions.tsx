@@ -41,17 +41,19 @@ import { useToast } from '@/hooks/use-toast'
 import { getCategoryDescendantIds, isTransactionInCategory } from '@/lib/categories'
 import { brl, currentMonth, formatDate } from '@/lib/format'
 import { exportTransactionsToCsv } from '@/lib/exportCsv'
+import { ArrowLeftRight } from 'lucide-react'
+import { isTransfer, transferAccountsLabel } from '@/lib/transactionTypes'
 import {
   deleteTransaction,
   listTransactions,
   transactionAttachmentUrl,
 } from '@/services/transactions'
-import type { Transaction, TransactionType } from '@/types/finance'
+import type { Account, Transaction, TransactionType } from '@/types/finance'
 import { cn } from '@/lib/utils'
 
 const PAGE_SIZE = 10
 
-type Tab = 'todas' | 'receita' | 'despesa'
+type Tab = 'todas' | 'receita' | 'despesa' | 'transferencia'
 
 export default function TransactionsPage() {
   const { accounts, categories } = useFinance()
@@ -89,6 +91,7 @@ export default function TransactionsPage() {
     void reload()
   }, [reload])
 
+  const accountsById = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts])
   const roots = useMemo(() => categories.filter((item) => !item.parent), [categories])
   const subcategories = useMemo(
     () => categories.filter((item) => item.parent === parentFilter),
@@ -272,6 +275,7 @@ export default function TransactionsPage() {
             ['todas', 'Todas'],
             ['receita', 'Receitas'],
             ['despesa', 'Despesas'],
+            ['transferencia', 'Transferências'],
           ] as [Tab, string][]
         ).map(([value, label]) => (
           <button
@@ -416,6 +420,7 @@ export default function TransactionsPage() {
                 <TransactionRow
                   key={transaction.id}
                   transaction={transaction}
+                  accountsById={accountsById}
                   onEdit={() => {
                     setEditing(transaction)
                     setModalOpen(true)
@@ -432,6 +437,7 @@ export default function TransactionsPage() {
             <TransactionCard
               key={transaction.id}
               transaction={transaction}
+              accountsById={accountsById}
               onEdit={() => {
                 setEditing(transaction)
                 setModalOpen(true)
@@ -588,22 +594,31 @@ export default function TransactionsPage() {
 
 function TransactionRow({
   transaction,
+  accountsById,
   onEdit,
   onDelete,
   onPreview,
 }: {
   transaction: Transaction
+  accountsById: Map<string, Account>
   onEdit: () => void
   onDelete: () => void
   onPreview: () => void
 }) {
   const category = transaction.expand?.category
+  const transfer = isTransfer(transaction)
+  const transferLabel = transferAccountsLabel(transaction, accountsById)
   return (
     <tr className="group text-sm transition hover:bg-fin-surface/60">
       <td className="whitespace-nowrap px-5 py-4 text-fin-muted">{formatDate(transaction.date)}</td>
       <td className="max-w-64 px-5 py-4">
         <span className="flex items-center gap-2 font-medium">
-          <span className="truncate">{transaction.description}</span>
+          {transfer && <ArrowLeftRight className="h-3.5 w-3.5 shrink-0 text-fin-primary" />}
+          <span className="truncate">
+            {transfer
+              ? transferLabel || transaction.description
+              : transaction.description}
+          </span>
           {transaction.attachment && (
             <button onClick={onPreview} className="text-fin-primary" title="Ver comprovante">
               <Paperclip className="h-3.5 w-3.5" />
@@ -615,25 +630,40 @@ function TransactionRow({
         )}
       </td>
       <td className="px-5 py-4">
-        <span
-          className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
-          style={{
-            background: `${category?.color || '#71717A'}14`,
-            color: category?.color || '#71717A',
-          }}
-        >
-          <i
-            className="h-1.5 w-1.5 rounded-full"
-            style={{ background: category?.color || '#71717A' }}
-          />
-          {category?.name || 'Sem categoria'}
-        </span>
+        {transfer ? (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-fin-surface px-2.5 py-1 text-xs font-medium text-fin-primary">
+            <ArrowLeftRight className="h-3 w-3" />
+            Transferência
+          </span>
+        ) : (
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+            style={{
+              background: `${category?.color || '#71717A'}14`,
+              color: category?.color || '#71717A',
+            }}
+          >
+            <i
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ background: category?.color || '#71717A' }}
+            />
+            {category?.name || 'Sem categoria'}
+          </span>
+        )}
       </td>
-      <td className="px-5 py-4 text-fin-muted">{transaction.expand?.account?.name || '—'}</td>
+      <td className="px-5 py-4 text-fin-muted">
+        {transfer ? transferLabel || '—' : transaction.expand?.account?.name || '—'}
+      </td>
       <td
-        className={`whitespace-nowrap px-5 py-4 text-right font-extrabold ${transaction.type === 'receita' ? 'text-emerald-800' : 'text-rose-800'}`}
+        className={`whitespace-nowrap px-5 py-4 text-right font-extrabold ${
+          transfer
+            ? 'text-fin-primary'
+            : transaction.type === 'receita'
+              ? 'text-emerald-800'
+              : 'text-rose-800'
+        }`}
       >
-        {transaction.type === 'receita' ? '+' : '−'} {brl.format(transaction.amount)}
+        {transfer ? '⇄' : transaction.type === 'receita' ? '+' : '−'} {brl.format(transaction.amount)}
       </td>
       <td className="px-3 py-4">
         <ActionMenu onEdit={onEdit} onDelete={onDelete} />
@@ -644,36 +674,61 @@ function TransactionRow({
 
 function TransactionCard({
   transaction,
+  accountsById,
   onEdit,
   onDelete,
   onPreview,
 }: {
   transaction: Transaction
+  accountsById: Map<string, Account>
   onEdit: () => void
   onDelete: () => void
   onPreview: () => void
 }) {
+  const transfer = isTransfer(transaction)
+  const transferLabel = transferAccountsLabel(transaction, accountsById)
   return (
     <div className="p-4">
       <div className="flex items-start gap-3">
         <span
-          className={`mt-0.5 grid h-9 w-9 place-items-center rounded-full ${transaction.type === 'receita' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}
+          className={`mt-0.5 grid h-9 w-9 place-items-center rounded-full ${
+            transfer
+              ? 'bg-indigo-100 text-fin-primary'
+              : transaction.type === 'receita'
+                ? 'bg-emerald-100 text-emerald-800'
+                : 'bg-rose-100 text-rose-800'
+          }`}
         >
-          <span className="text-base font-bold">{transaction.type === 'receita' ? '↗' : '↘'}</span>
+          <span className="text-base font-bold">
+            {transfer ? '⇄' : transaction.type === 'receita' ? '↗' : '↘'}
+          </span>
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className="truncate text-sm font-bold text-fin-text">{transaction.description}</p>
+              <p className="truncate text-sm font-bold text-fin-text">
+                {transfer
+                  ? `Transferência: ${transferLabel || transaction.description}`
+                  : transaction.description}
+              </p>
               <p className="mt-1 text-xs text-fin-muted">
                 {formatDate(transaction.date)} ·{' '}
-                {transaction.expand?.category?.name || 'Sem categoria'}
+                {transfer
+                  ? transferLabel || 'Transferência'
+                  : transaction.expand?.category?.name || 'Sem categoria'}
               </p>
             </div>
             <strong
-              className={`whitespace-nowrap text-sm font-extrabold ${transaction.type === 'receita' ? 'text-emerald-800' : 'text-rose-800'}`}
+              className={`whitespace-nowrap text-sm font-extrabold ${
+                transfer
+                  ? 'text-fin-primary'
+                  : transaction.type === 'receita'
+                    ? 'text-emerald-800'
+                    : 'text-rose-800'
+              }`}
             >
-              {transaction.type === 'receita' ? '+' : '−'} {brl.format(transaction.amount)}
+              {transfer ? '⇄' : transaction.type === 'receita' ? '+' : '−'}{' '}
+              {brl.format(transaction.amount)}
             </strong>
           </div>
           <div className="mt-3 flex items-center gap-2">
