@@ -4,6 +4,7 @@ import Layout from '@/components/Layout'
 import { FinanceProvider, useFinance } from '@/contexts/FinanceContext'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import Index from '@/pages/Index'
+import InicioPage from '@/pages/Inicio'
 import OnboardingPage from '@/pages/Onboarding'
 import TransactionsPage from '@/pages/Transactions'
 import BillsPage from '@/pages/Bills'
@@ -120,6 +121,7 @@ export default function App() {
           <Route path="/onboarding" element={<OnboardingGuard />} />
           <Route element={<ProtectedLayout />}>
             <Route index element={<Index />} />
+            <Route path="inicio" element={<InicioPage />} />
             <Route path="lancamentos" element={<TransactionsPage />} />
             <Route path="contas" element={<BillsPage />} />
             <Route path="recorrentes" element={<RecurringPage />} />

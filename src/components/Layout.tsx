@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Bell,
+  CalendarCheck,
   ChevronDown,
   CircleHelp,
   CreditCard,
@@ -49,7 +50,8 @@ import type { Bill, Transaction, TransactionType } from '@/types/finance'
 import { TransactionModal } from '@/components/finance/TransactionModal'
 
 const navItems = [
-  { to: '/', label: 'Início', icon: Home, exact: true },
+  { to: '/', label: 'Painel', icon: Home, exact: true },
+  { to: '/inicio', label: 'Início', icon: CalendarCheck },
   { to: '/lancamentos', label: 'Lançamentos', icon: ReceiptText },
   { to: '/contas', label: 'Contas', icon: CreditCard },
   { to: '/recorrentes', label: 'Recorrentes', icon: Repeat },
