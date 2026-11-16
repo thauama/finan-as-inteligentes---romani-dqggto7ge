@@ -315,13 +315,7 @@ export default function TransactionsPage() {
             <Upload className="h-4 w-4" />
             Importar PDF, Excel ou CSV
           </button>
-          <button
-            className="btn-primary"
-            onClick={() => {
-              setEditing(null)
-              setModalOpen(true)
-            }}
-          >
+          <button className="btn-primary" onClick={() => openEdit(null)}>
             <Plus className="h-4 w-4" />
             Novo lançamento
           </button>
@@ -480,10 +474,7 @@ export default function TransactionsPage() {
                   key={transaction.id}
                   transaction={transaction}
                   accountsById={accountsById}
-                  onEdit={() => {
-                    setEditing(transaction)
-                    setModalOpen(true)
-                  }}
+                  onEdit={() => openEdit(transaction)}
                   onDelete={() => setDeleting(transaction)}
                   onPreview={() => setPreviewing(transaction)}
                   onEditGroup={
@@ -515,10 +506,7 @@ export default function TransactionsPage() {
               key={transaction.id}
               transaction={transaction}
               accountsById={accountsById}
-              onEdit={() => {
-                setEditing(transaction)
-                setModalOpen(true)
-              }}
+              onEdit={() => openEdit(transaction)}
               onDelete={() => setDeleting(transaction)}
               onPreview={() => setPreviewing(transaction)}
               onEditGroup={
@@ -570,10 +558,7 @@ export default function TransactionsPage() {
               ) : null}
               <button
                 type="button"
-                onClick={() => {
-                  setEditing(null)
-                  setModalOpen(true)
-                }}
+                onClick={() => openEdit(null)}
                 className="btn-primary !min-h-[36px] !py-1.5 !text-xs"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -635,7 +620,7 @@ export default function TransactionsPage() {
       />
       <TransactionModal
         open={modalOpen}
-        onOpenChange={setModalOpen}
+        onOpenChange={closeModal}
         transaction={editing}
         defaultType={(tab === 'receita' ? 'receita' : 'despesa') as TransactionType}
         groupEdit={groupEditIds.length > 0 ? { ids: groupEditIds } : null}

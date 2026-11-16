@@ -71,6 +71,14 @@ import { DashboardAiCard } from '@/components/finance/DashboardAiCard'
 
 const chartColors = ['#4338CA', '#047857', '#D97706', '#BE123C', '#6D28D9', '#0E7490', '#C2410C']
 
+/**
+ * Parcela futura de parcelamento: despesa com data depois de hoje, criada pela
+ * importação (nota "parcela N/M" ou agrupamento "#P...").
+ */
+function isFutureInstallmentExpense(t: Transaction, today: string): boolean {
+  return t.type === 'despesa' && t.date > today && isInstallmentTransaction(t)
+}
+
 export default function Index() {
   const { user } = useAuth()
   const { accounts, categories } = useFinance()
@@ -131,17 +139,35 @@ export default function Index() {
   })
 
   const { start, next } = monthBounds(month)
+  const today = todayInput()
   const monthTransactions = useMemo(
     () =>
       transactions.filter((transaction) => transaction.date >= start && transaction.date < next),
     [transactions, start, next],
   )
+
+  // Parcelas futuras (datas > hoje) das importações com parcelamento: agora
+  // CONTAM como despesa realizada. As do mês corrente já entram via
+  // monthTransactions; as dos meses seguintes são somadas abaixo.
+  const futureInstallmentItems = useMemo(
+    () => transactions.filter((t) => isFutureInstallmentExpense(t, today)),
+    [transactions, today],
+  )
+  const futureInstallmentTotal = futureInstallmentItems.reduce(
+    (sum, transaction) => sum + transaction.amount,
+    0,
+  )
+  const futureBeyondMonthTotal = futureInstallmentItems
+    .filter((t) => t.date >= next)
+    .reduce((sum, transaction) => sum + transaction.amount, 0)
+
   const income = monthTransactions
     .filter((transaction) => transaction.type === 'receita')
     .reduce((sum, transaction) => sum + transaction.amount, 0)
-  const expense = monthTransactions
-    .filter((transaction) => transaction.type === 'despesa')
-    .reduce((sum, transaction) => sum + transaction.amount, 0)
+  const expense =
+    monthTransactions
+      .filter((transaction) => transaction.type === 'despesa')
+      .reduce((sum, transaction) => sum + transaction.amount, 0) + futureBeyondMonthTotal
 
   const accountBalances = useMemo(
     () =>
@@ -168,12 +194,12 @@ export default function Index() {
   const animatedBalance = useCountUp(totalBalance)
 
   const balanceSeries = useMemo(() => {
-    const today = new Date()
-    today.setHours(12, 0, 0, 0)
+    const now = new Date()
+    now.setHours(12, 0, 0, 0)
     const initialTotal = accounts.reduce((sum, account) => sum + account.initial_balance, 0)
     return Array.from({ length: 30 }, (_, index) => {
-      const date = new Date(today)
-      date.setDate(today.getDate() - (29 - index))
+      const date = new Date(now)
+      date.setDate(now.getDate() - (29 - index))
       const end = new Date(date)
       end.setHours(23, 59, 59, 999)
       const balance =
@@ -285,7 +311,8 @@ export default function Index() {
       }))
   }, [monthTransactions, categories])
 
-  // Metas do mês calculadas com agregação de subcategorias
+  // Metas do mês calculadas com agregação de subcategorias.
+  // Parcelas futuras da categoria (meses seguintes) entram no gasto realizado.
   const budgetProgressList = useMemo(() => {
     return budgets.map((b) => {
       const category = categories.find((c) => c.id === b.category) || b.expand?.category
@@ -294,9 +321,15 @@ export default function Index() {
         .map((c) => c.id)
       const allIds = category ? [category.id, ...subcategoryIds] : [b.category]
 
-      const spent = monthTransactions
+      const monthSpent = monthTransactions
         .filter((t) => t.type === 'despesa' && allIds.includes(t.category))
         .reduce((sum, t) => sum + t.amount, 0)
+      // Apenas parcelas de meses FUTUROS: as do mês corrente (data > hoje) já
+      // estão em monthTransactions e não podem ser somadas de novo.
+      const futureSpent = futureInstallmentItems
+        .filter((t) => t.date >= next && allIds.includes(t.category))
+        .reduce((sum, t) => sum + t.amount, 0)
+      const spent = monthSpent + futureSpent
 
       const limit = b.monthly_limit
       const pct = limit > 0 ? (spent / limit) * 100 : 0
@@ -309,6 +342,7 @@ export default function Index() {
         budget: b,
         category,
         spent,
+        futureSpent,
         limit,
         pct,
         isOver,
@@ -316,7 +350,7 @@ export default function Index() {
         color,
       }
     })
-  }, [budgets, categories, monthTransactions])
+  }, [budgets, categories, monthTransactions, futureInstallmentItems, next])
 
   const upcoming = bills
     .filter((bill) => bill.status !== 'pago')
@@ -324,16 +358,10 @@ export default function Index() {
     .slice(0, 5)
 
   // Previsão de parcelas: lançamentos FUTUROS criados pela importação com
-  // parcelamento (nota "parcela N/M" ou agrupamento "#P..."), fora do realizado.
+  // parcelamento (nota "parcela N/M" ou agrupamento "#P...") — já contabilizados
+  // no realizado, mantidos aqui apenas como visão do compromisso futuro.
   const installmentForecast = useMemo(() => {
-    const today = todayInput()
-    const future = transactions.filter(
-      (t) =>
-        t.type === 'despesa' &&
-        t.date > today &&
-        isInstallmentTransaction(t) &&
-        !t.notes?.includes('Realizado'),
-    )
+    const future = transactions.filter((t) => isFutureInstallmentExpense(t, today))
     const byMonth = new Map<string, number>()
     let total = 0
     let count = 0
@@ -355,7 +383,7 @@ export default function Index() {
           label: monthTitle(m),
         })),
     }
-  }, [transactions])
+  }, [transactions, today])
 
   const firstName = String(user?.name || 'Usuário').split(' ')[0]
 
@@ -451,6 +479,11 @@ export default function Index() {
               ↘ {brl.format(expense)}{' '}
               <span className="text-xs font-medium text-rose-700/80">saídas</span>
             </span>
+            {futureInstallmentTotal > 0 && (
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50/90 px-3 py-1 text-xs font-semibold text-amber-800 shadow-2xs">
+                inclui {brl.format(futureInstallmentTotal)} de parcelas futuras
+              </span>
+            )}
           </div>
           <div className="mt-4 h-[250px] w-full">
             <ResponsiveContainer width="100%" height="100%">
@@ -635,6 +668,11 @@ export default function Index() {
                     ) : (
                       <span>Resta {brl.format(item.limit - item.spent)}</span>
                     )}
+                    {item.futureSpent > 0 && (
+                      <span className="block text-amber-700">
+                        inclui {brl.format(item.futureSpent)} de parcelas futuras
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}
@@ -654,7 +692,7 @@ export default function Index() {
         )}
       </article>
 
-      {/* Previsão de parcelas (fora do realizado) */}
+      {/* Previsão de parcelas — já contabilizada no realizado */}
       {installmentForecast.count > 0 && (
         <article className="fin-card animate-fade-up stagger-3 p-5 sm:p-6 border-amber-200/70 bg-amber-50/30">
           <div className="flex items-center justify-between gap-3">
@@ -666,7 +704,7 @@ export default function Index() {
                 <h2 className="section-title">Previsão de parcelas</h2>
                 <p className="mt-0.5 text-xs text-fin-muted">
                   {installmentForecast.count} parcela(s) futura(s) de importações com parcelamento —
-                  fora do realizado
+                  já contabilizadas no realizado
                 </p>
               </div>
             </div>

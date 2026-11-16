@@ -54,8 +54,6 @@ interface PdfImportModalProps {
 
 interface DraftRow extends PdfImportDraftItem {
   discarded: boolean
-  /** Casou com um lançamento já existente (heurística ±3 dias + valor + descrição). */
-  duplicate: boolean
   /** Selo visível de possível duplicado (fica true mesmo se o usuário marcar de novo). */
   duplicateFlag: boolean
   /** false = parcelamento desmarcado: lança só a parcela atual como linha comum. */
@@ -320,7 +318,7 @@ export function PdfImportModal({
       toast({
         title: 'Importação concluída',
         description:
-          result.future_created > 0
+          (result.future_created || 0) > 0
             ? `${result.created} lançamento(s) criado(s) e ${result.future_created} parcela(s) futura(s) agendada(s).`
             : `${result.created} lançamento(s) criado(s).`,
       })

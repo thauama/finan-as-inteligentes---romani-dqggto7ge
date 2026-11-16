@@ -19,8 +19,8 @@ export interface PdfImportDraftItem {
 
 export interface PdfImportResult {
   created: number
-  /** Parcelas futuras criadas além das linhas confirmadas. */
-  future_created: number
+  /** Parcelas futuras criadas além das linhas confirmadas (só na confirmação). */
+  future_created?: number
 }
 
 export interface PdfImportConfirmInput extends PdfImportDraftItem {}
