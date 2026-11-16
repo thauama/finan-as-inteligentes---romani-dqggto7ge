@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 
 import { CategoryModal } from '@/components/finance/CategoryModal'
+import { CategoryDeleteModal } from '@/components/finance/CategoryDeleteModal'
 import { BudgetModal } from '@/components/finance/BudgetModal'
 import { deleteBudget, listBudgets } from '@/services/budgets'
 import type { Budget } from '@/types/finance'
@@ -40,7 +41,7 @@ import { useToast } from '@/hooks/use-toast'
 import { brl, currentMonth, monthBounds, monthTitle, shiftMonth, todayInput } from '@/lib/format'
 import { CalendarClock } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { deleteCategory } from '@/services/categories'
+
 import { listTransactions } from '@/services/transactions'
 import type { Category, Transaction, TransactionType } from '@/types/finance'
 
@@ -52,6 +53,8 @@ interface CategoryCardProps {
   childrenCategories: Category[]
   transactions: Transaction[]
   onEdit: (category: Category) => void
+  onEditChildren: (child: Category, parent: Category) => void
+  onAddChild: (parent: Category) => void
   onDelete: (category: Category) => void
 }
 
@@ -65,6 +68,7 @@ export default function CategoriesPage() {
   const [query, setQuery] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Category | null>(null)
+  const [editingParent, setEditingParent] = useState<Category | null>(null)
   const [deleting, setDeleting] = useState<Category | null>(null)
 
   // Metas de gasto
@@ -215,44 +219,6 @@ export default function CategoriesPage() {
     }
   }
 
-  async function confirmDelete() {
-    if (!deleting) return
-    const childIds = categories
-      .filter((category) => category.parent === deleting.id)
-      .map((category) => category.id)
-    const linked = transactions.filter(
-      (transaction) =>
-        transaction.category === deleting.id || childIds.includes(transaction.category),
-    ).length
-
-    if (linked > 0) {
-      toast({
-        variant: 'destructive',
-        title: 'Categoria em uso',
-        description: 'Reclassifique os lançamentos vinculados antes de excluir esta categoria.',
-      })
-      setDeleting(null)
-      return
-    }
-
-    try {
-      for (const childId of childIds) await deleteCategory(childId)
-      await deleteCategory(deleting.id)
-      await refreshCategories()
-      toast({ title: 'Categoria excluída' })
-    } catch {
-      toast({
-        variant: 'destructive',
-        title: 'Não foi possível excluir',
-        description: 'Verifique se a categoria está vinculada a lançamentos ou contas.',
-      })
-    } finally {
-      setDeleting(null)
-    }
-  }
-
-  const deletingMetrics = deleting ? metrics(deleting) : { count: 0, total: 0 }
-
   return (
     <div className="space-y-6 page-container">
       <header className="animate-fade-up flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
@@ -268,6 +234,7 @@ export default function CategoriesPage() {
               className="btn-primary"
               onClick={() => {
                 setEditing(null)
+                setEditingParent(null)
                 setModalOpen(true)
               }}
             >
@@ -363,6 +330,17 @@ export default function CategoriesPage() {
                   transactions={transactions}
                   onEdit={(item) => {
                     setEditing(item)
+                    setEditingParent(null)
+                    setModalOpen(true)
+                  }}
+                  onEditChildren={(child, parent) => {
+                    setEditing(child)
+                    setEditingParent(parent)
+                    setModalOpen(true)
+                  }}
+                  onAddChild={(parent) => {
+                    setEditing(null)
+                    setEditingParent(parent)
                     setModalOpen(true)
                   }}
                   onDelete={setDeleting}
@@ -661,42 +639,30 @@ export default function CategoriesPage() {
 
       <CategoryModal
         category={editing}
+        parentCategory={editingParent}
         open={modalOpen}
         onOpenChange={setModalOpen}
         onSaved={() => {
           toast({
-            title: editing ? 'Categoria atualizada' : 'Categoria criada',
+            title:
+              editing || editingParent
+                ? editing
+                  ? 'Categoria atualizada'
+                  : 'Subcategoria criada'
+                : 'Categoria criada',
           })
           setEditing(null)
+          setEditingParent(null)
         }}
       />
 
-      <AlertDialog
+      <CategoryDeleteModal
+        category={deleting}
         open={Boolean(deleting)}
         onOpenChange={(open) => {
           if (!open) setDeleting(null)
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Excluir “{deleting?.name}”?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {deletingMetrics.count > 0
-                ? `Esta categoria e suas subcategorias possuem ${deletingMetrics.count} lançamento(s), totalizando ${brl.format(deletingMetrics.total)} no mês. Para preservar o histórico financeiro, reclassifique esses lançamentos antes da exclusão.`
-                : 'A categoria e todas as suas subcategorias serão removidas. Essa ação não pode ser desfeita.'}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-fin-danger hover:bg-red-600"
-              onClick={() => void confirmDelete()}
-            >
-              {deletingMetrics.count > 0 ? 'Entendi' : 'Excluir categoria'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      />
     </div>
   )
 }
@@ -706,6 +672,8 @@ function CategoryCard({
   childrenCategories,
   transactions,
   onEdit,
+  onEditChildren,
+  onAddChild,
   onDelete,
 }: CategoryCardProps) {
   const allIds = [category.id, ...childrenCategories.map((item) => item.id)]
@@ -746,19 +714,25 @@ function CategoryCard({
         <CategoryActions category={category} onEdit={onEdit} onDelete={onDelete} />
       </div>
 
-      {childrenCategories.length > 0 && (
-        <div className="border-t border-fin-border bg-fin-surface/55 px-5 py-2">
-          {childrenCategories.map((child) => (
-            <SubcategoryRow
-              key={child.id}
-              category={child}
-              transactions={transactions}
-              onEdit={onEdit}
-              onDelete={onDelete}
-            />
-          ))}
-        </div>
-      )}
+      <div className="border-t border-fin-border bg-fin-surface/55 px-5 py-2">
+        {childrenCategories.map((child) => (
+          <SubcategoryRow
+            key={child.id}
+            category={child}
+            transactions={transactions}
+            onEdit={(c) => onEditChildren(c, category)}
+            onDelete={onDelete}
+          />
+        ))}
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 py-2 text-xs font-medium text-fin-muted transition hover:text-fin-primary"
+          onClick={() => onAddChild(category)}
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Nova subcategoria
+        </button>
+      </div>
     </article>
   )
 }
