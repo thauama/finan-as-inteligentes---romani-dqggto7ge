@@ -149,7 +149,13 @@ export default function TransactionsPage() {
         return false
       }
 
-      if (account && transaction.account !== account) return false
+      if (account) {
+        // No extrato de uma conta, transferência aparece na origem E no destino
+        const touchesAccount =
+          transaction.account === account ||
+          (transaction.type === 'transferencia' && transaction.destination_account === account)
+        if (!touchesAccount) return false
+      }
       const date = transaction.date.slice(0, 10)
       if (month && !date.startsWith(month)) return false
       if (start && date < start) return false

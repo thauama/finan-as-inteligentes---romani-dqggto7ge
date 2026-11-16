@@ -62,7 +62,7 @@ export default function OnboardingPage() {
   const [cardColor, setCardColor] = useState('#F4526B')
 
   // ETAPA 3: Formulário Lançamento
-  const [txType, setTxType] = useState<TransactionType>('despesa')
+  const [txType, setTxType] = useState<'receita' | 'despesa'>('despesa')
   const [txDescription, setTxDescription] = useState('')
   const [txAmount, setTxAmount] = useState<number>(0)
   const [txDate, setTxDate] = useState<string>(todayInput())

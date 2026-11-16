@@ -10,7 +10,16 @@ export function listTransactions(filter = '', sort = '-date') {
   })
 }
 
-function toPayload(input: TransactionInput) {
+/**
+ * REGRA: transferências NUNCA passam pelo create/update padrão — o payload
+ * padrão não grava destination_account, e a criação/edição acontece somente
+ * pelas rotas dedicadas de src/services/transfers.ts. Aqui o tipo vem restrito.
+ */
+export type RegularTransactionInput = Omit<TransactionInput, 'type'> & {
+  type: 'receita' | 'despesa'
+}
+
+function toPayload(input: RegularTransactionInput) {
   const form = new FormData()
   form.set('description', input.description)
   form.set('amount', String(input.amount))
@@ -24,13 +33,13 @@ function toPayload(input: TransactionInput) {
   return form
 }
 
-export function createTransaction(input: TransactionInput) {
+export function createTransaction(input: RegularTransactionInput) {
   return pb
     .collection<Transaction>('transactions')
     .create(toPayload(input), { expand: 'category,account' })
 }
 
-export function updateTransaction(id: string, input: TransactionInput) {
+export function updateTransaction(id: string, input: RegularTransactionInput) {
   return pb
     .collection<Transaction>('transactions')
     .update(id, toPayload(input), { expand: 'category,account' })

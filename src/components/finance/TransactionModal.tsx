@@ -11,12 +11,36 @@ import {
 import { useFinance } from '@/contexts/FinanceContext'
 import { extractFieldErrors, getErrorMessage, type FieldErrors } from '@/lib/pocketbase/errors'
 import { todayInput, toDateInput } from '@/lib/format'
-import { createTransaction, updateTransaction } from '@/services/transactions'
+import {
+  createTransaction,
+  updateTransaction,
+  type RegularTransactionInput,
+} from '@/services/transactions'
 import { createTransfer, updateTransfer } from '@/services/transfers'
 import { isTransfer as transactionIsTransfer } from '@/lib/transactionTypes'
-import type { Transaction, TransactionInput, TransactionType } from '@/types/finance'
+import type { Account, Transaction, TransactionInput, TransactionType } from '@/types/finance'
 import { CategoryTreeSelect } from '@/components/finance/CategoryTreeSelect'
 import { cn } from '@/lib/utils'
+
+/**
+ * As rotas dedicadas de transferência devolvem um objeto plano (sem os
+ * métodos do SDK). Normalizamos para um Transaction tipado, expandindo as
+ * contas com base na lista carregada no contexto.
+ */
+function normalizeTransferRecord(raw: Transaction, accounts: Account[]): Transaction {
+  const account = accounts.find((item) => item.id === raw.account)
+  const destination = accounts.find((item) => item.id === raw.destination_account)
+  return {
+    ...raw,
+    collectionId: raw.collectionId || 'transactions',
+    collectionName: 'transactions',
+    expand: {
+      ...raw.expand,
+      account: raw.expand?.account || account,
+      destination_account: raw.expand?.destination_account || destination,
+    },
+  }
+}
 
 interface TransactionModalProps {
   open: boolean
@@ -123,22 +147,39 @@ export function TransactionModal({
     setMessage('')
     try {
       let saved: Transaction
-      if (editingTransfer) {
-        // Atualiza o MESMO lançamento (sem criar cópia) via rota dedicada
-        saved = await updateTransfer({
-          id: transaction!.id,
-          from_account_id: form.account,
-          to_account_id: form.destination_account || '',
-          amount: form.amount,
-          date: form.date,
-          description: form.description,
-          notes: form.notes,
-        })
+      if (isTransfer) {
+        // Toda transferência passa pelas rotas dedicadas — o create/update
+        // padrão NÃO grava destination_account.
+        if (editingTransfer) {
+          // Atualiza o MESMO lançamento (sem criar cópia) via rota dedicada
+          saved = await updateTransfer({
+            id: transaction!.id,
+            from_account_id: form.account,
+            to_account_id: form.destination_account || '',
+            amount: form.amount,
+            date: form.date,
+            description: form.description,
+            notes: form.notes,
+          })
+        } else {
+          saved = await createTransfer({
+            from_account_id: form.account,
+            to_account_id: form.destination_account || '',
+            amount: form.amount,
+            date: form.date,
+            description: form.description,
+            notes: form.notes,
+          })
+        }
       } else {
         saved = transaction
-          ? await updateTransaction(transaction.id, form)
-          : await createTransaction(form)
+          ? await updateTransaction(transaction.id, {
+              ...form,
+              type: form.type as 'receita' | 'despesa',
+            })
+          : await createTransaction(form as RegularTransactionInput)
       }
+      saved = normalizeTransferRecord(saved, accounts)
       onSaved?.(saved)
       onOpenChange(false)
     } catch (error) {
@@ -164,12 +205,19 @@ export function TransactionModal({
               <button
                 key={type}
                 type="button"
+                disabled={Boolean(transaction)}
+                title={
+                  transaction
+                    ? 'O tipo não pode ser alterado em um lançamento existente.'
+                    : undefined
+                }
                 onClick={() => {
                   set('type', type)
                   set('category', '')
                 }}
                 className={cn(
                   'rounded-lg px-3 py-2.5 text-sm font-semibold transition',
+                  Boolean(transaction) && 'cursor-not-allowed',
                   form.type === type
                     ? type === 'receita'
                       ? 'bg-white text-fin-success shadow-sm'
