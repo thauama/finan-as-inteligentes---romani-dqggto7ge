@@ -182,10 +182,10 @@ export function PdfImportModal({
       const result = await importPdf(file)
       const existing = await fetchExisting()
       setRows(
-        markDuplicates(result.draft, existing).map((item) => ({
+        markDuplicates(result.draft, existing).map(({ duplicate, ...item }) => ({
           ...item,
-          duplicateFlag: !!item.duplicate,
-          discarded: !!item.duplicate,
+          duplicateFlag: !!duplicate,
+          discarded: !!duplicate,
           installments: true,
         })),
       )
@@ -220,10 +220,10 @@ export function PdfImportModal({
       }
       const existing = await fetchExisting()
       setRows(
-        markDuplicates(result.draft, existing).map((item) => ({
+        markDuplicates(result.draft, existing).map(({ duplicate, ...item }) => ({
           ...item,
-          duplicateFlag: !!item.duplicate,
-          discarded: !!item.duplicate,
+          duplicateFlag: !!duplicate,
+          discarded: !!duplicate,
           installments: true,
         })),
       )

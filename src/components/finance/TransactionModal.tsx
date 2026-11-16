@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react'
-import { CalendarDays, Check, FileText, Loader2, UploadCloud, X } from 'lucide-react'
+import { CalendarDays, Check, FileText, Layers, Loader2, UploadCloud, X } from 'lucide-react'
 
 import {
   Dialog,
@@ -17,6 +17,8 @@ import {
   type RegularTransactionInput,
 } from '@/services/transactions'
 import { createTransfer, updateTransfer } from '@/services/transfers'
+import { updateInstallmentGroup } from '@/lib/installmentGroupService'
+import { stripInstallmentSuffix as stripSuffix } from '@/lib/installments'
 import { isTransfer as transactionIsTransfer } from '@/lib/transactionTypes'
 import type { Account, Transaction, TransactionInput, TransactionType } from '@/types/finance'
 import { CategoryTreeSelect } from '@/components/finance/CategoryTreeSelect'
@@ -48,6 +50,13 @@ interface TransactionModalProps {
   transaction?: Transaction | null
   defaultType?: TransactionType
   onSaved?: (transaction: Transaction) => void
+  /**
+   * Modo "editar grupo em bloco": aplica valor/categoria/conta (apenas os
+   * campos alterados) a TODOS os lançamentos do grupo de parcelas — os já
+   * lançados e as parcelas futuras.
+   */
+  groupEdit?: { ids: string[] } | null
+  onGroupSaved?: (updated: number) => void
 }
 
 const initialInput = (type: TransactionType): TransactionInput => ({
@@ -67,6 +76,8 @@ export function TransactionModal({
   transaction,
   defaultType = 'despesa',
   onSaved,
+  groupEdit = null,
+  onGroupSaved,
 }: TransactionModalProps) {
   const { accounts, categories } = useFinance()
   const [form, setForm] = useState<TransactionInput>(() => initialInput(defaultType))
@@ -77,6 +88,9 @@ export function TransactionModal({
   const fileRef = useRef<HTMLInputElement>(null)
   const isTransfer = form.type === 'transferencia'
   const editingTransfer = Boolean(transaction && transactionIsTransfer(transaction))
+  const groupMode = Boolean(groupEdit && groupEdit.ids.length > 0 && transaction)
+  /** Snapshot do clique: só o que o usuário mudou de verdade vai para o grupo. */
+  const groupInitial = useRef<{ amount: number; category: string; account: string } | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -94,10 +108,18 @@ export function TransactionModal({
         notes: transaction.notes || '',
         attachment: null,
       })
+      groupInitial.current = groupMode
+        ? {
+            amount: transaction.amount,
+            category: transaction.category,
+            account: transaction.account,
+          }
+        : null
     } else {
       setForm(initialInput(defaultType))
+      groupInitial.current = null
     }
-  }, [open, transaction, defaultType])
+  }, [open, transaction, defaultType, groupMode])
 
   function set<K extends keyof TransactionInput>(key: K, value: TransactionInput[K]) {
     setForm((current) => ({ ...current, [key]: value }))
@@ -130,6 +152,35 @@ export function TransactionModal({
     if (!form.amount || form.amount <= 0) localErrors.amount = 'Informe um valor maior que zero.'
     if (!form.date) localErrors.date = 'Informe a data.'
     if (!form.account) localErrors.account = 'Selecione a conta de origem.'
+
+    if (groupMode) {
+      // Edição em bloco: valida só os 3 campos aplicáveis e aplica a TODOS os
+      // membros do grupo apenas o que foi alterado nesta tela.
+      if (!form.category) localErrors.category = 'Selecione uma categoria.'
+      if (Object.keys(localErrors).length) return setErrors(localErrors)
+      const patch: Partial<Pick<RegularTransactionInput, 'amount' | 'category' | 'account'>> = {}
+      const initial = groupInitial.current
+      if (!initial || form.amount !== initial.amount) patch.amount = form.amount
+      if (!initial || form.category !== initial.category) patch.category = form.category
+      if (!initial || form.account !== initial.account) patch.account = form.account
+      if (Object.keys(patch).length === 0) {
+        setMessage('Nenhuma alteração para aplicar: valor, categoria e conta estão iguais.')
+        return
+      }
+      setSaving(true)
+      setMessage('')
+      try {
+        const updated = await updateInstallmentGroup(groupEdit!.ids, patch)
+        onGroupSaved?.(updated)
+        onOpenChange(false)
+      } catch (error) {
+        setErrors(extractFieldErrors(error))
+        setMessage(getErrorMessage(error))
+      } finally {
+        setSaving(false)
+      }
+      return
+    }
 
     if (isTransfer) {
       if (!form.destination_account) {
@@ -194,12 +245,31 @@ export function TransactionModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92vh] overflow-y-auto border-fin-border bg-white sm:max-w-[620px]">
         <DialogHeader>
-          <DialogTitle>{transaction ? 'Editar lançamento' : 'Novo lançamento'}</DialogTitle>
+          <DialogTitle>
+            {groupMode
+              ? 'Editar grupo de parcelas'
+              : transaction
+                ? 'Editar lançamento'
+                : 'Novo lançamento'}
+          </DialogTitle>
           <DialogDescription>
-            Registre uma entrada, saída ou transferência entre contas.
+            {groupMode
+              ? `As alterações se aplicam a todos os ${groupEdit!.ids.length} lançamentos do grupo — lançados e parcelas futuras.`
+              : 'Registre uma entrada, saída ou transferência entre contas.'}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-5 pt-2">
+          {groupMode && (
+            <div className="flex items-start gap-2 rounded-xl border border-fin-primary/20 bg-indigo-50 px-3 py-2.5">
+              <Layers className="mt-0.5 h-4 w-4 shrink-0 text-fin-primary" />
+              <p className="text-[13px] leading-5 text-fin-text">
+                Editando em bloco o grupo <strong>{stripSuffix(transaction!.description)}</strong> (
+                {transaction!.notes || 'parcelamento'}). Somente valor, categoria e conta são
+                aplicados ao grupo — data, descrição e notas ficam intactas.
+              </p>
+            </div>
+          )}
+
           <div className="grid grid-cols-3 rounded-xl bg-fin-surface p-1">
             {(['receita', 'despesa', 'transferencia'] as const).map((type) => (
               <button
@@ -232,7 +302,7 @@ export function TransactionModal({
             ))}
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className={cn('grid gap-4', groupMode && 'sm:grid-cols-1')}>
             <Field label="Valor" error={errors.amount}>
               <div className="relative">
                 <span className="absolute left-3 top-2.5 text-sm text-fin-muted">R$</span>
@@ -255,12 +325,13 @@ export function TransactionModal({
                   type="date"
                   value={form.date}
                   onChange={(event) => set('date', event.target.value)}
+                  disabled={groupMode}
                 />
               </div>
             </Field>
           </div>
 
-          {!isTransfer && (
+          {!isTransfer && !groupMode && (
             <Field label="Descrição" error={errors.description}>
               <input
                 className="field"
@@ -345,16 +416,18 @@ export function TransactionModal({
             </>
           )}
 
-          <Field label="Notas" error={errors.notes}>
-            <textarea
-              className="field min-h-20 resize-none"
-              value={form.notes}
-              onChange={(event) => set('notes', event.target.value)}
-              placeholder="Informações adicionais (opcional)"
-            />
-          </Field>
+          {!groupMode && (
+            <Field label="Notas" error={errors.notes}>
+              <textarea
+                className="field min-h-20 resize-none"
+                value={form.notes}
+                onChange={(event) => set('notes', event.target.value)}
+                placeholder="Informações adicionais (opcional)"
+              />
+            </Field>
+          )}
 
-          {!isTransfer && (
+          {!isTransfer && !groupMode && (
             <Field label="Comprovante" error={errors.attachment}>
               <button
                 type="button"
@@ -413,7 +486,11 @@ export function TransactionModal({
               ) : (
                 <>
                   <Check className="h-4 w-4" />
-                  {editingTransfer ? 'Salvar alterações' : 'Criar lançamento'}
+                  {groupMode
+                    ? 'Aplicar ao grupo'
+                    : editingTransfer
+                      ? 'Salvar alterações'
+                      : 'Criar lançamento'}
                 </>
               )}
             </button>

@@ -3,8 +3,10 @@ import { useSearchParams } from 'react-router-dom'
 import {
   ChevronLeft,
   ChevronRight,
+  Copy,
   Download,
   FileText,
+  Layers,
   MoreHorizontal,
   Paperclip,
   Pencil,
@@ -19,6 +21,8 @@ import {
 
 import { PdfImportModal } from '@/components/finance/PdfImportModal'
 import { TransactionModal } from '@/components/finance/TransactionModal'
+import { deleteInstallmentGroup, findGroupMembers } from '@/lib/installmentGroupService'
+import { isInstallmentTransaction } from '@/lib/installments'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,6 +38,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useFinance } from '@/contexts/FinanceContext'
@@ -66,6 +71,11 @@ export default function TransactionsPage() {
   const [editing, setEditing] = useState<Transaction | null>(null)
   const [deleting, setDeleting] = useState<Transaction | null>(null)
   const [previewing, setPreviewing] = useState<Transaction | null>(null)
+  /** Grupo de parcelas em edição em bloco (ids de todos os membros). */
+  const [groupEditIds, setGroupEditIds] = useState<string[]>([])
+  /** Lançamento cujo grupo inteiro será excluído (para confirmação). */
+  const [groupDeleting, setGroupDeleting] = useState<{ ids: string[]; label: string } | null>(null)
+  const [groupDeletingBusy, setGroupDeletingBusy] = useState(false)
 
   const tab = (params.get('tipo') as Tab) || 'todas'
   const query = params.get('q') || ''
@@ -223,7 +233,46 @@ export default function TransactionsPage() {
     }
   }
 
+  /** Exclusão em bloco: todos os lançamentos do grupo de parcelas. */
+  async function confirmGroupDelete() {
+    if (!groupDeleting) return
+    setGroupDeletingBusy(true)
+    try {
+      const deleted = await deleteInstallmentGroup(groupDeleting.ids)
+      await reload()
+      toast({
+        title: 'Grupo de parcelas excluído',
+        description: `${deleted} lançamento(s) foram removidos em bloco.`,
+      })
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: 'Não foi possível excluir o grupo',
+        description: 'Alguns lançamentos podem ter ficado — tente novamente.',
+      })
+    } finally {
+      setGroupDeletingBusy(false)
+      setGroupDeleting(null)
+    }
+  }
+
   const hasFilters = Boolean(query || category || parentFilter || account || month || start || end)
+
+  /** Abre a edição individual — sempre limpa o modo de grupo residual. */
+  function openEdit(transaction: Transaction | null) {
+    setEditing(transaction)
+    setGroupEditIds([])
+    setModalOpen(true)
+  }
+
+  /** Fecha o modal e reseta qualquer modo de edição residual. */
+  function closeModal(open: boolean) {
+    setModalOpen(open)
+    if (!open) {
+      setEditing(null)
+      setGroupEditIds([])
+    }
+  }
 
   return (
     <div className="space-y-6 page-container">
@@ -437,6 +486,24 @@ export default function TransactionsPage() {
                   }}
                   onDelete={() => setDeleting(transaction)}
                   onPreview={() => setPreviewing(transaction)}
+                  onEditGroup={
+                    isInstallmentTransaction(transaction)
+                      ? () => {
+                          setEditing(transaction)
+                          setGroupEditIds(findGroupMembers(transaction, transactions))
+                          setModalOpen(true)
+                        }
+                      : undefined
+                  }
+                  onDeleteGroup={
+                    isInstallmentTransaction(transaction)
+                      ? () =>
+                          setGroupDeleting({
+                            ids: findGroupMembers(transaction, transactions),
+                            label: transaction.description,
+                          })
+                      : undefined
+                  }
                 />
               ))}
             </tbody>
@@ -454,6 +521,24 @@ export default function TransactionsPage() {
               }}
               onDelete={() => setDeleting(transaction)}
               onPreview={() => setPreviewing(transaction)}
+              onEditGroup={
+                isInstallmentTransaction(transaction)
+                  ? () => {
+                      setEditing(transaction)
+                      setGroupEditIds(findGroupMembers(transaction, transactions))
+                      setModalOpen(true)
+                    }
+                  : undefined
+              }
+              onDeleteGroup={
+                isInstallmentTransaction(transaction)
+                  ? () =>
+                      setGroupDeleting({
+                        ids: findGroupMembers(transaction, transactions),
+                        label: transaction.description,
+                      })
+                  : undefined
+              }
             />
           ))}
         </div>
@@ -553,6 +638,14 @@ export default function TransactionsPage() {
         onOpenChange={setModalOpen}
         transaction={editing}
         defaultType={(tab === 'receita' ? 'receita' : 'despesa') as TransactionType}
+        groupEdit={groupEditIds.length > 0 ? { ids: groupEditIds } : null}
+        onGroupSaved={(updated) => {
+          void reload()
+          toast({
+            title: 'Grupo atualizado em bloco',
+            description: `${updated} lançamento(s) do parcelamento foram alterados — incluindo as parcelas futuras.`,
+          })
+        }}
         onSaved={(saved) => {
           setTransactions((current) =>
             editing
@@ -591,6 +684,32 @@ export default function TransactionsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <AlertDialog
+        open={Boolean(groupDeleting)}
+        onOpenChange={(open) => {
+          if (!open) setGroupDeleting(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir grupo de parcelas?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Serão excluídos {groupDeleting?.ids.length ?? 0} lançamento(s) do parcelamento “
+              {groupDeleting?.label}” — passados e futuros. Esta ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={groupDeletingBusy}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-fin-danger hover:bg-red-600"
+              disabled={groupDeletingBusy}
+              onClick={() => void confirmGroupDelete()}
+            >
+              {groupDeletingBusy ? 'Excluindo...' : 'Excluir grupo'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <AttachmentPreview
         transaction={previewing}
         open={Boolean(previewing)}
@@ -608,12 +727,16 @@ function TransactionRow({
   onEdit,
   onDelete,
   onPreview,
+  onEditGroup,
+  onDeleteGroup,
 }: {
   transaction: Transaction
   accountsById: Map<string, Account>
   onEdit: () => void
   onDelete: () => void
   onPreview: () => void
+  onEditGroup?: () => void
+  onDeleteGroup?: () => void
 }) {
   const category = transaction.expand?.category
   const transfer = isTransfer(transaction)
@@ -675,7 +798,12 @@ function TransactionRow({
         {brl.format(transaction.amount)}
       </td>
       <td className="px-3 py-4">
-        <ActionMenu onEdit={onEdit} onDelete={onDelete} />
+        <ActionMenu
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onEditGroup={onEditGroup}
+          onDeleteGroup={onDeleteGroup}
+        />
       </td>
     </tr>
   )
@@ -687,12 +815,16 @@ function TransactionCard({
   onEdit,
   onDelete,
   onPreview,
+  onEditGroup,
+  onDeleteGroup,
 }: {
   transaction: Transaction
   accountsById: Map<string, Account>
   onEdit: () => void
   onDelete: () => void
   onPreview: () => void
+  onEditGroup?: () => void
+  onDeleteGroup?: () => void
 }) {
   const transfer = isTransfer(transaction)
   const transferLabel = transferAccountsLabel(transaction, accountsById)
@@ -751,7 +883,12 @@ function TransactionCard({
               </button>
             )}
             <div className="ml-auto">
-              <ActionMenu onEdit={onEdit} onDelete={onDelete} />
+              <ActionMenu
+                onEdit={onEdit}
+                onDelete={onDelete}
+                onEditGroup={onEditGroup}
+                onDeleteGroup={onDeleteGroup}
+              />
             </div>
           </div>
         </div>
@@ -760,7 +897,18 @@ function TransactionCard({
   )
 }
 
-function ActionMenu({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => void }) {
+function ActionMenu({
+  onEdit,
+  onDelete,
+  onEditGroup,
+  onDeleteGroup,
+}: {
+  onEdit: () => void
+  onDelete: () => void
+  onEditGroup?: () => void
+  onDeleteGroup?: () => void
+}) {
+  const hasGroupActions = Boolean(onEditGroup || onDeleteGroup)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -773,10 +921,23 @@ function ActionMenu({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => 
           <Pencil className="mr-2 h-4 w-4" />
           Editar
         </DropdownMenuItem>
+        {onEditGroup && (
+          <DropdownMenuItem onClick={onEditGroup}>
+            <Copy className="mr-2 h-4 w-4" />
+            Editar grupo em bloco
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem className="text-fin-danger" onClick={onDelete}>
           <Trash2 className="mr-2 h-4 w-4" />
           Excluir
         </DropdownMenuItem>
+        {onDeleteGroup && (
+          <DropdownMenuItem className="text-fin-danger" onClick={onDeleteGroup}>
+            <Layers className="mr-2 h-4 w-4" />
+            Excluir grupo em bloco
+          </DropdownMenuItem>
+        )}
+        {hasGroupActions && <DropdownMenuSeparator />}
       </DropdownMenuContent>
     </DropdownMenu>
   )
