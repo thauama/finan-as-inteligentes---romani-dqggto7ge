@@ -13,6 +13,7 @@ import { SessionExpiryPanel } from '@/components/finance/SessionExpiryPanel'
 import { useFinance } from '@/contexts/FinanceContext'
 import { getErrorMessage } from '@/lib/pocketbase/errors'
 import { isSessionExpiredError } from '@/lib/pocketbase/sessionExpiry'
+import { countTransactionsForCategory } from '@/services/transactions'
 import { createCategory, updateCategory } from '@/services/categories'
 import type { Category, CategoryInput, TransactionType } from '@/types/finance'
 
@@ -37,7 +38,7 @@ export function CategoryModal({
   onOpenChange: (value: boolean) => void
   onSaved?: (category: Category) => void
 }) {
-  const { categories, transactions, refreshCategories } = useFinance()
+  const { categories, refreshCategories } = useFinance()
   const navigate = useNavigate()
   const [form, setForm] = useState<CategoryInput>({
     name: '',
@@ -47,17 +48,34 @@ export function CategoryModal({
   })
   const [message, setMessage] = useState('')
   const [sessionExpired, setSessionExpired] = useState(false)
+  const [txCount, setTxCount] = useState(0)
   const [saving, setSaving] = useState(false)
   const isSubcategoryMode = Boolean(parentCategory)
 
-  // Vínculos da categoria em edição: lançamentos diretos e subcategorias
-  const editInfo = useMemo(() => {
-    if (!category) return { txCount: 0, childCount: 0 }
-    const childCount = categories.filter((item) => item.parent === category.id).length
-    const txCount = transactions.filter((t) => t.category === category.id).length
-    return { txCount, childCount }
-  }, [category, categories, transactions])
-  const typeLocked = Boolean(category) && (editInfo.txCount > 0 || editInfo.childCount > 0)
+  // Vínculos da categoria em edição: lançamentos diretos (consultados no
+  // backend, o contexto não carrega lançamentos) e subcategorias (da lista local)
+  const childCount = useMemo(
+    () => (category ? categories.filter((item) => item.parent === category.id).length : 0),
+    [categories, category],
+  )
+  useEffect(() => {
+    if (!open || !category) {
+      setTxCount(0)
+      return
+    }
+    let cancelled = false
+    void countTransactionsForCategory(category.id)
+      .then((result) => {
+        if (!cancelled) setTxCount(result.totalItems)
+      })
+      .catch(() => {
+        if (!cancelled) setTxCount(0)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, category])
+  const typeLocked = Boolean(category) && (txCount > 0 || childCount > 0)
 
   const parents = useMemo(
     () =>
@@ -174,9 +192,9 @@ export function CategoryModal({
                         <option value="receita">Receita</option>
                       </select>
                       <span className="block text-xs text-fin-muted">
-                        {editInfo.txCount > 0
-                          ? `${editInfo.txCount} lançamento(s) usam esta categoria — o tipo não pode mudar.`
-                          : `${editInfo.childCount} subcategoria(s) herdariam tipo inválido — o tipo não pode mudar.`}
+                        {txCount > 0
+                          ? `${txCount} lançamento(s) usam esta categoria — o tipo não pode mudar.`
+                          : `${childCount} subcategoria(s) herdariam tipo inválido — o tipo não pode mudar.`}
                       </span>
                     </>
                   ) : (
