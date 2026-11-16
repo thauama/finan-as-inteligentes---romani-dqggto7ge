@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ChevronLeft,
   ChevronRight,
@@ -53,6 +53,8 @@ import {
   listTransactions,
   transactionAttachmentUrl,
 } from '@/services/transactions'
+import { isSessionExpiredError } from '@/lib/pocketbase/sessionExpiry'
+import { SessionExpiryPanel } from '@/components/finance/SessionExpiryPanel'
 import type { Account, Transaction, TransactionType } from '@/types/finance'
 import { cn } from '@/lib/utils'
 
@@ -71,6 +73,9 @@ export default function TransactionsPage() {
   const [editing, setEditing] = useState<Transaction | null>(null)
   const [deleting, setDeleting] = useState<Transaction | null>(null)
   const [previewing, setPreviewing] = useState<Transaction | null>(null)
+  /** true quando a exclusão falhou com 401 — exibe o painel "Sessão expirada". */
+  const [deleteAuthError, setDeleteAuthError] = useState(false)
+  const navigate = useNavigate()
   /** Grupo de parcelas em edição em bloco (ids de todos os membros). */
   const [groupEditIds, setGroupEditIds] = useState<string[]>([])
   /** Lançamento cujo grupo inteiro será excluído (para confirmação). */
@@ -218,18 +223,25 @@ export default function TransactionsPage() {
 
   async function confirmDelete() {
     if (!deleting) return
+    setDeleteAuthError(false)
     try {
       await deleteTransaction(deleting.id)
       setTransactions((current) => current.filter((item) => item.id !== deleting.id))
       toast({ title: 'Lançamento excluído', description: 'O saldo foi recalculado.' })
-    } catch {
-      toast({
-        variant: 'destructive',
-        title: 'Não foi possível excluir',
-        description: 'Tente novamente.',
-      })
-    } finally {
       setDeleting(null)
+    } catch (error) {
+      if (isSessionExpiredError(error)) {
+        // 401 real: painel padrão "Sessão expirada" em vez de erro genérico.
+        setDeleteAuthError(true)
+      } else {
+        toast({
+          variant: 'destructive',
+          title: 'Não foi possível excluir',
+          description: 'Tente novamente.',
+        })
+        setDeleting(null)
+      }
+      // Com 401, o AlertDialog permanece aberto exibindo o painel.
     }
   }
 
@@ -244,12 +256,17 @@ export default function TransactionsPage() {
         title: 'Grupo de parcelas excluído',
         description: `${deleted} lançamento(s) foram removidos em bloco.`,
       })
-    } catch {
-      toast({
-        variant: 'destructive',
-        title: 'Não foi possível excluir o grupo',
-        description: 'Alguns lançamentos podem ter ficado — tente novamente.',
-      })
+    } catch (error) {
+      if (isSessionExpiredError(error)) {
+        // 401 real: painel padrão "Sessão expirada" em vez de erro genérico.
+        setDeleteAuthError(true)
+      } else {
+        toast({
+          variant: 'destructive',
+          title: 'Não foi possível excluir o grupo',
+          description: 'Alguns lançamentos podem ter ficado — tente novamente.',
+        })
+      }
     } finally {
       setGroupDeletingBusy(false)
       setGroupDeleting(null)
@@ -645,28 +662,52 @@ export default function TransactionsPage() {
         }}
       />
       <AlertDialog
-        open={Boolean(deleting)}
+        open={Boolean(deleting) || deleteAuthError}
         onOpenChange={(open) => {
-          if (!open) setDeleting(null)
+          if (!open) {
+            setDeleting(null)
+            setDeleteAuthError(false)
+          }
         }}
       >
         <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Excluir lançamento?</AlertDialogTitle>
-            <AlertDialogDescription>
-              “{deleting?.description}” será removido permanentemente e o saldo da conta será
-              recalculado. Esta ação não pode ser desfeita.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-fin-danger hover:bg-red-600"
-              onClick={() => void confirmDelete()}
-            >
-              Excluir
-            </AlertDialogAction>
-          </AlertDialogFooter>
+          {deleteAuthError ? (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Excluir lançamento</AlertDialogTitle>
+              </AlertDialogHeader>
+              <SessionExpiryPanel
+                onClose={() => {
+                  setDeleting(null)
+                  setDeleteAuthError(false)
+                }}
+                onLogin={() => {
+                  setDeleting(null)
+                  setDeleteAuthError(false)
+                  navigate('/login')
+                }}
+              />
+            </>
+          ) : (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Excluir lançamento?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  “{deleting?.description}” será removido permanentemente e o saldo da conta será
+                  recalculado. Esta ação não pode ser desfeita.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-fin-danger hover:bg-red-600"
+                  onClick={() => void confirmDelete()}
+                >
+                  Excluir
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          )}
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog

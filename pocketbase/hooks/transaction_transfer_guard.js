@@ -28,12 +28,15 @@ onRecordUpdateRequest((e) => {
   e.next()
 }, 'transactions')
 
+// Exclusão de transferência: PERMITIDA pela API padrão (DELETE /api/collections/
+// transactions/{id}). Transferência é UM único lançamento (conta de origem +
+// destination_account, sem registro-pareado), a deleteRule da coleção já garante
+// que só o dono exclui (user = @request.auth.id) e não há saldo persistido no
+// banco — ele é recalculado no cliente a partir dos lançamentos, então remover
+// o registro já devolve o saldo corretamente. Bloquear aqui sem rota dedicada
+// tornava a exclusão de transferência impossível ("não é possível excluir").
+// v0.0.36: criação/edição continuam bloqueadas — só pelas rotas dedicadas em
+// transaction_transfer.js, que gravam destination_account.
 onRecordDeleteRequest((e) => {
-  const record = e.record
-  if (record && record.getString('type') === 'transferencia') {
-    throw new BadRequestError(
-      'Transferências são excluídas apenas pela rota dedicada de transferência.',
-    )
-  }
   e.next()
 }, 'transactions')
