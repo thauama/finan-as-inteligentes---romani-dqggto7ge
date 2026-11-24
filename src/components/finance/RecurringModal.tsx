@@ -65,11 +65,13 @@ export const frequencyLabel = (
   if (Number.isFinite(interval) && interval > 0)
     return `A cada ${interval} mês${interval > 1 ? 'es' : ''}`
 
-  const fallback =
-    frequency && frequency !== CUSTOM_FREQUENCY
-      ? frequency.charAt(0).toUpperCase() + frequency.slice(1)
-      : 'Personalizada'
-  return fallback
+  if (!frequency) return 'Personalizada'
+  // Frequências legadas gravadas como texto livre ("a cada 4 meses", "A cada 6
+  // meses"...) já carregam o intervalo na própria string — exiba-as como vieram,
+  // com a inicial maiúscula.
+  const textoLegado = frequency.charAt(0).toUpperCase() + frequency.slice(1)
+  if (frequency !== CUSTOM_FREQUENCY && !/^\d/.test(frequency)) return textoLegado
+  return 'Personalizada'
 }
 
 const initialInput = (type: TransactionType = 'despesa'): RecurringTransactionInput => ({
@@ -207,8 +209,10 @@ export function RecurringModal({
         amount: numAmount,
         // Frequência fixa grava seu intervalo (1=mensal, 2=bimestral, 3=
         // trimestral, 6=semestral, 12=anual); Personalizado grava o valor
-        // digitado e um texto legível, para exibir "A cada N meses" depois.
-        frequency: isCustom ? `a cada ${customInterval} meses` : form.frequency,
+        // literal 'personalizado' (valor permitido pelo select do backend) e
+        // o número de meses em interval_months — a tela Recorrentes exibe
+        // "A cada N meses" a partir do intervalo.
+        frequency: isCustom ? CUSTOM_FREQUENCY : form.frequency,
         interval_months: isCustom ? customInterval : frequencyIntervalMonths(form.frequency),
         day_of_month: Number(form.day_of_month) || 1,
       }
