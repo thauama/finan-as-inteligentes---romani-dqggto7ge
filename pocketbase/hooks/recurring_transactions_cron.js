@@ -163,6 +163,7 @@ cronAdd('recurring-transactions-daily', '0 12 * * *', () => {
             skippedCount++
           } else {
             createTx(userId, description, amount, txType, categoryId, accountId, todayYMD)
+            createdCount++
             item.set('last_run', todayYMD + ' 12:00:00.000Z')
             $app.save(item)
           }
@@ -215,6 +216,7 @@ cronAdd('recurring-transactions-daily', '0 12 * * *', () => {
         }
 
         createTx(userId, description, amount, txType, categoryId, accountId, occYMD)
+        createdCount++
 
         if (occAbsMonth <= currentAbsMonth) {
           item.set('last_run', occYMD + ' 12:00:00.000Z')
@@ -386,6 +388,7 @@ routerAdd(
               skippedCount++
             } else {
               createTx(userId, description, amount, txType, categoryId, accountId, todayYMD)
+              createdCount++
               item.set('last_run', todayYMD + ' 12:00:00.000Z')
               $app.save(item)
             }
@@ -430,6 +433,7 @@ routerAdd(
           }
 
           createTx(userId, description, amount, txType, categoryId, accountId, occYMD)
+          createdCount++
 
           if (occAbsMonth <= currentAbsMonth) {
             item.set('last_run', occYMD + ' 12:00:00.000Z')
