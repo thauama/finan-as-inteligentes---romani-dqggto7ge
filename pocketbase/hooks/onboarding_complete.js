@@ -64,6 +64,9 @@ routerAdd(
     userSettings.set('ai_report_auto_enabled', true)
     userSettings.set('ai_report_notify_email', true)
     userSettings.set('ai_report_hour', 9)
+    // Flag persistente: o onboarding SÓ é considerado concluído por este campo
+    // (nunca pela existência de lançamentos — quem apaga tudo não volta aqui).
+    userSettings.set('onboarding_completed', true)
     $app.save(userSettings)
 
     // Enviar e-mail de boas-vindas confirmando que as automações estão ativas

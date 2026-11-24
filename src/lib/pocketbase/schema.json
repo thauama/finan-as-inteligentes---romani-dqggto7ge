@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-24T21:56:56.583Z",
+  "generatedAt": "2026-11-24T22:17:09.983Z",
   "collections": [
     {
       "name": "users",
@@ -713,6 +713,12 @@
         {
           "name": "custom_recipient",
           "type": "email",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "onboarding_completed",
+          "type": "bool",
           "required": false,
           "system": false
         }
