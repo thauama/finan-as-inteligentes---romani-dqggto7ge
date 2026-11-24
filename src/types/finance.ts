@@ -150,6 +150,11 @@ export interface BudgetInput {
   monthly_limit: number
 }
 
+/**
+ * Frequências gravadas no banco. Como o usuário pode criar intervalos sob
+ * medida ("A cada N meses"), o campo também aceita texto livre — os valores
+ * nomeados são os casos conhecidos; o resto é tratado por interval_months.
+ */
 export type RecurringFrequency =
   | 'mensal'
   | 'bimestral'
@@ -158,6 +163,7 @@ export type RecurringFrequency =
   | 'semanal'
   | 'quinzenal'
   | 'anual'
+  | (string & {})
 
 /** Intervalo em meses entre ocorrências (1=mensal, 2=bimestral, 3=trimestral, 6=semestral, 12=anual). */
 export type RecurringIntervalMonths = 1 | 2 | 3 | 6 | 12

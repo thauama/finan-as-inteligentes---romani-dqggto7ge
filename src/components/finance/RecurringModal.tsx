@@ -42,12 +42,35 @@ export const FREQUENCY_OPTIONS: Array<{
   { value: 'anual', label: 'Anual', intervalMonths: 12 },
 ]
 
-export const frequencyIntervalMonths = (frequency: RecurringFrequency): number =>
+/** Valor do select que representa uma frequência sob medida ("A cada N meses"). */
+export const CUSTOM_FREQUENCY = 'personalizado' as const
+
+export const frequencyIntervalMonths = (frequency: string): number =>
   FREQUENCY_OPTIONS.find((option) => option.value === frequency)?.intervalMonths ?? 1
 
-export const frequencyLabel = (frequency: string): string =>
-  FREQUENCY_OPTIONS.find((option) => option.value === frequency)?.label ??
-  frequency.charAt(0).toUpperCase() + frequency.slice(1)
+/**
+ * Rótulo legível de qualquer frequência gravada no banco: as fixas recebem os
+ * nomes consagrados (Mensal, Bimestral, ...), qualquer outra coisa — inclusive
+ * textos legados fora da lista — cai em "A cada N meses" quando há intervalo,
+ * ou no próprio texto quando ele já é descritivo.
+ */
+export const frequencyLabel = (
+  frequency: string,
+  intervalMonths?: number | string | null,
+): string => {
+  const known = FREQUENCY_OPTIONS.find((option) => option.value === frequency)
+  if (known) return known.label
+
+  const interval = Math.round(Number(intervalMonths))
+  if (Number.isFinite(interval) && interval > 0)
+    return `A cada ${interval} mês${interval > 1 ? 'es' : ''}`
+
+  const fallback =
+    frequency && frequency !== CUSTOM_FREQUENCY
+      ? frequency.charAt(0).toUpperCase() + frequency.slice(1)
+      : 'Personalizada'
+  return fallback
+}
 
 const initialInput = (type: TransactionType = 'despesa'): RecurringTransactionInput => ({
   description: '',
@@ -73,6 +96,8 @@ export function RecurringModal({
   const { accounts, categories } = useFinance()
   const [form, setForm] = useState<RecurringTransactionInput>(() => initialInput(defaultType))
   const [amountStr, setAmountStr] = useState('')
+  // "Personalizado" revela o campo de intervalo em meses, editável pelo usuário.
+  const [customIntervalStr, setCustomIntervalStr] = useState('4')
   const [errors, setErrors] = useState<FieldErrors>({})
   const [message, setMessage] = useState('')
   const [saving, setSaving] = useState(false)
@@ -82,12 +107,19 @@ export function RecurringModal({
     setErrors({})
     setMessage('')
     if (recurring) {
+      const knownFrequency = FREQUENCY_OPTIONS.some(
+        (option) => option.value === recurring.frequency,
+      )
+      // Frequência sob medida (ex.: "a cada 4 meses" com interval 4) abre o
+      // modal já no modo Personalizado, com o intervalo atual no campo.
+      const interval =
+        Number(recurring.interval_months) || frequencyIntervalMonths(recurring.frequency)
       setForm({
         description: recurring.description,
         amount: recurring.amount,
         type: recurring.type,
-        frequency: recurring.frequency,
-        interval_months: frequencyIntervalMonths(recurring.frequency),
+        frequency: knownFrequency ? recurring.frequency : CUSTOM_FREQUENCY,
+        interval_months: interval,
         day_of_month: recurring.day_of_month || 1,
         start_date: toDateInput(recurring.start_date),
         end_date: recurring.end_date ? toDateInput(recurring.end_date) : '',
@@ -95,10 +127,12 @@ export function RecurringModal({
         account: recurring.account,
         active: recurring.active,
       })
+      setCustomIntervalStr(String(interval && interval !== 1 ? interval : 4))
       setAmountStr(String(recurring.amount))
     } else {
       setForm(initialInput(defaultType))
       setAmountStr('')
+      setCustomIntervalStr('4')
     }
   }, [open, recurring, defaultType])
 
@@ -108,6 +142,26 @@ export function RecurringModal({
   ) {
     setForm((current) => ({ ...current, [key]: value }))
     setErrors((current) => ({ ...current, [key]: '' }))
+  }
+
+  function selectFrequency(value: string) {
+    if (value === CUSTOM_FREQUENCY) {
+      setForm((current) => ({
+        ...current,
+        frequency: CUSTOM_FREQUENCY,
+        interval_months: Math.max(1, Math.round(Number(customIntervalStr)) || 4),
+      }))
+      setErrors((current) => ({ ...current, frequency: '' }))
+      return
+    }
+    const option = FREQUENCY_OPTIONS.find((candidate) => candidate.value === value)
+    if (!option) return
+    setForm((current) => ({
+      ...current,
+      frequency: option.value,
+      interval_months: option.intervalMonths,
+    }))
+    setErrors((current) => ({ ...current, frequency: '' }))
   }
 
   async function submit(event: FormEvent) {
@@ -120,13 +174,21 @@ export function RecurringModal({
     if (!form.account) localErrors.account = 'Selecione uma conta.'
     if (!form.category) localErrors.category = 'Selecione uma categoria.'
 
-    if (form.frequency === 'mensal' || form.frequency === 'anual') {
+    const isCustom = form.frequency === CUSTOM_FREQUENCY
+    let customInterval = 0
+    if (isCustom) {
+      customInterval = Math.round(Number(customIntervalStr.replace(',', '.')))
+      if (!Number.isFinite(customInterval) || customInterval < 1) {
+        localErrors.frequency = 'Informe um intervalo inteiro de pelo menos 1 mês.'
+      }
+    }
+
+    if (form.frequency === 'mensal' || form.frequency === 'anual' || isCustom) {
       const day = Number(form.day_of_month)
       if (isNaN(day) || day < 1 || day > 31) {
         localErrors.day_of_month = 'Informe um dia entre 1 e 31.'
       }
     }
-    // (validação de frequência: o select é fechado, sempre tem valor válido)
 
     if (form.end_date && form.start_date && form.end_date < form.start_date) {
       localErrors.end_date = 'A data de término não pode ser anterior ao início.'
@@ -143,9 +205,11 @@ export function RecurringModal({
       const payload: RecurringTransactionInput = {
         ...form,
         amount: numAmount,
-        // O intervalo em meses é derivado da frequência escolhida (1=mensal,
-        // 2=bimestral, 3=trimestral, 6=semestral, 12=anual)
-        interval_months: frequencyIntervalMonths(form.frequency),
+        // Frequência fixa grava seu intervalo (1=mensal, 2=bimestral, 3=
+        // trimestral, 6=semestral, 12=anual); Personalizado grava o valor
+        // digitado e um texto legível, para exibir "A cada N meses" depois.
+        frequency: isCustom ? `a cada ${customInterval} meses` : form.frequency,
+        interval_months: isCustom ? customInterval : frequencyIntervalMonths(form.frequency),
         day_of_month: Number(form.day_of_month) || 1,
       }
       const saved = recurring
@@ -160,6 +224,8 @@ export function RecurringModal({
       setSaving(false)
     }
   }
+
+  const isCustomFrequency = form.frequency === CUSTOM_FREQUENCY
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -229,17 +295,43 @@ export function RecurringModal({
               <select
                 className="field"
                 value={form.frequency}
-                onChange={(e) => set('frequency', e.target.value as RecurringFrequency)}
+                onChange={(e) => selectFrequency(e.target.value)}
               >
                 {FREQUENCY_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
                   </option>
                 ))}
+                <option value={CUSTOM_FREQUENCY}>Personalizado...</option>
               </select>
-              <span className="text-[11px] text-fin-muted">
-                De quanto em quanto tempo o lançamento é gerado (ex.: Trimestral = a cada 3 meses).
-              </span>
+              {isCustomFrequency && (
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="whitespace-nowrap text-xs text-fin-muted">A cada</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    inputMode="numeric"
+                    className="field w-24 py-1.5 text-sm"
+                    value={customIntervalStr}
+                    onChange={(e) => {
+                      setCustomIntervalStr(e.target.value)
+                      setErrors((current) => ({ ...current, frequency: '' }))
+                    }}
+                    aria-label="Intervalo em meses"
+                    placeholder="Ex.: 4"
+                  />
+                  <span className="whitespace-nowrap text-xs text-fin-muted">
+                    {Number(customIntervalStr) === 1 ? 'mês' : 'meses'}
+                  </span>
+                </div>
+              )}
+              {!isCustomFrequency && (
+                <span className="text-[11px] text-fin-muted">
+                  De quanto em quanto tempo o lançamento é gerado (ex.: Trimestral = a cada 3
+                  meses). Escolha "Personalizado..." para digitar qualquer intervalo.
+                </span>
+              )}
             </Field>
           </div>
 

@@ -544,7 +544,9 @@ function RecurringRow({
 
       {/* Frequência */}
       <td className="px-5 py-4 whitespace-nowrap text-fin-muted">
-        <span className="font-medium text-fin-text">{frequencyLabel(item.frequency)}</span>
+        <span className="font-medium text-fin-text">
+          {frequencyLabel(item.frequency, item.interval_months)}
+        </span>
         <span className="text-xs block text-fin-muted">
           {item.frequency === 'semanal'
             ? 'A cada semana'
