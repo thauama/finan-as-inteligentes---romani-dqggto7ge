@@ -1,26 +1,35 @@
-// Cron diário para geração automática de lançamentos recorrentes
-// Executa todo dia às 12:00 UTC (09:00 no fuso de Brasília).
+// Cron diário para geração automática de lançamentos recorrentes.
+// Roda todo dia às 12:00 UTC (09:00 em Brasília) via cronAdd('recurring-transactions-daily').
+// Também pode ser acionado manualmente (tela Recorrentes → "Sincronizar agora") pela
+// rota POST /backend/v1/recurring/process.
 //
-// Estratégia (v0.0.34): além do lançamento do mês de vencimento atual, o cron gera
-// antecipadamente os lançamentos dos ~12 meses seguintes de cada recorrência, para que
-// a previsão do mês seguinte no Dashboard/Metas já contabilize despesas e receitas.
-// O mês de vencimento de cada ocorrência respeita interval_months (1=mensal,
-// 2=bimestral, 3=trimestral, 6=semestral, 12=anual; 0/vazio = mensal).
-// Idempotente: se já existe lançamento da mesma recorrência (mesma categoria, conta,
-// descrição) no mesmo mês, não duplica — rodar 2x não cria nada.
+// Para cada recorrência ATIVA o cron gera os lançamentos dos ~12 MESES seguintes,
+// respeitando o intervalo entre ocorrências (interval_months: 1=mensal, 2=bimestral,
+// 3=trimestral, 6=semestral, 12=anual). Uma recorrência trimestral cria uma linha a
+// cada 3 meses; uma anual, uma por ano. Cada ocorrência cai no dia day_of_month do
+// mês de vencimento (clampado ao último dia de meses curtos).
+//
+// Idempotente: só cria o lançamento se AINDA não existir, na mesma conta, mesma
+// categoria e mesma descrição, uma transação naquele mês (dedup por recorrência+data) —
+// rodar 2x no mesmo dia não duplica nada. last_run avança até a ocorrência mais
+// recente já alcançada (no máximo o mês corrente, nunca um lançamento futuro).
 //
 // IMPORTANTE (JSVM do PocketBase): TODA a lógica vive DENTRO do corpo de cada callback.
 // Funções/constantes top-level NÃO são visíveis dentro dos callbacks (Hook scoping error).
+// Por isso a mesma lógica aparece duplicada no callback do cron e no callback da rota.
 
 cronAdd('recurring-transactions-daily', '0 12 * * *', () => {
   const now = new Date()
   // Data de Brasília (America/Sao_Paulo: UTC-3)
   const brtTime = new Date(now.getTime() - 3 * 60 * 60 * 1000)
 
-  console.log(
-    '[cron:recurring-transactions-daily] Iniciando processamento para data: ' +
-      brtTime.toISOString().slice(0, 10),
-  )
+  const todayYMD = brtTime.toISOString().slice(0, 10)
+  const currentYear = brtTime.getUTCFullYear()
+  const currentMonthIdx = brtTime.getUTCMonth()
+  const currentAbsMonth = currentYear * 12 + currentMonthIdx
+  const FORWARD_MONTHS = 12
+
+  console.log('[cron:recurring-transactions-daily] Iniciando processamento para data: ' + todayYMD)
 
   let recurrings = []
   try {
@@ -36,13 +45,12 @@ cronAdd('recurring-transactions-daily', '0 12 * * *', () => {
     return
   }
 
-  // ---- Processamento (inline) ----
-  const todayYMD = brtTime.toISOString().slice(0, 10)
-  const currentYear = brtTime.getUTCFullYear()
-  const currentMonthIdx = brtTime.getUTCMonth()
-  const currentAbsMonth = currentYear * 12 + currentMonthIdx
-  const FORWARD_MONTHS = 12
+  if (!recurrings || recurrings.length === 0) {
+    console.log('[cron:recurring-transactions-daily] Nenhuma recorrência ativa. Finalizado.')
+    return
+  }
 
+  // ---- Processamento (inline, obrigatório no JSVM) ----
   const pad = (n) => String(n).padStart(2, '0')
 
   // Dia efetivo de vencimento num mês (clampa para o último dia do mês)
@@ -101,6 +109,7 @@ cronAdd('recurring-transactions-daily', '0 12 * * *', () => {
   for (let i = 0; i < recurrings.length; i++) {
     const item = recurrings[i]
     const recId = item.id
+    const recDesc = item.getString('description')
     const userId = item.getString('user')
 
     try {
@@ -125,13 +134,11 @@ cronAdd('recurring-transactions-daily', '0 12 * * *', () => {
       const startYMD = startDateStr ? startDateStr.slice(0, 10) : ''
       const endYMD = endDateStr ? endDateStr.slice(0, 10) : ''
 
-      // Recorrência ainda não começou
-      if (startYMD && todayYMD < startYMD) {
-        skippedCount++
-        continue
-      }
+      // (não pula a recorrência quando start_date é futuro: as ocorrências
+      // futuras devem ser geradas desde já — o loop abaixo filtra o que é
+      // anterior ao início)
 
-      const description = item.getString('description')
+      const description = recDesc
       const amount = item.getFloat('amount')
       const txType = item.getString('type')
       const categoryId = item.getString('category')
@@ -202,14 +209,11 @@ cronAdd('recurring-transactions-daily', '0 12 * * *', () => {
 
         // Dedup: um lançamento por recorrência/mês
         if (hasTxInMonth(userId, categoryId, accountId, description, occYear, occMonthIdx)) {
-          // last_run só avança até o mês atual (futuras não marcam o ciclo)
-          if (occAbsMonth <= currentAbsMonth) {
-            const lastRunStr = item.getString('last_run')
-            const lastRunYMD = lastRunStr ? lastRunStr.slice(0, 10) : ''
-            if (!lastRunYMD || lastRunYMD < occYMD) {
-              item.set('last_run', occYMD + ' 12:00:00.000Z')
-              $app.save(item)
-            }
+          const lastRunStr = item.getString('last_run')
+          const lastRunYMD = lastRunStr ? lastRunStr.slice(0, 10) : ''
+          if (!lastRunYMD || lastRunYMD < occYMD) {
+            item.set('last_run', occYMD + ' 12:00:00.000Z')
+            $app.save(item)
           }
           skippedCount++
           continue
@@ -218,10 +222,8 @@ cronAdd('recurring-transactions-daily', '0 12 * * *', () => {
         createTx(userId, description, amount, txType, categoryId, accountId, occYMD)
         createdCount++
 
-        if (occAbsMonth <= currentAbsMonth) {
-          item.set('last_run', occYMD + ' 12:00:00.000Z')
-          $app.save(item)
-        }
+        item.set('last_run', occYMD + ' 12:00:00.000Z')
+        $app.save(item)
       }
     } catch (itemErr) {
       errorCount++
@@ -328,6 +330,7 @@ routerAdd(
     for (let i = 0; i < recurrings.length; i++) {
       const item = recurrings[i]
       const recId = item.id
+      const recDesc = item.getString('description')
       const userId = item.getString('user')
 
       try {
@@ -352,18 +355,17 @@ routerAdd(
         const startYMD = startDateStr ? startDateStr.slice(0, 10) : ''
         const endYMD = endDateStr ? endDateStr.slice(0, 10) : ''
 
-        if (startYMD && todayYMD < startYMD) {
-          skippedCount++
-          continue
-        }
-
-        const description = item.getString('description')
+        const description = recDesc
         const amount = item.getFloat('amount')
         const txType = item.getString('type')
         const categoryId = item.getString('category')
         const accountId = item.getString('account')
 
         if (frequency === 'semanal' || frequency === 'quinzenal') {
+          if (startYMD && todayYMD < startYMD) {
+            skippedCount++
+            continue
+          }
           const lastRunStr = item.getString('last_run')
           const lastRunYMD = lastRunStr ? lastRunStr.slice(0, 10) : ''
           let shouldRunToday = false
@@ -420,13 +422,11 @@ routerAdd(
           if (occYMD < startYMD) continue
 
           if (hasTxInMonth(userId, categoryId, accountId, description, occYear, occMonthIdx)) {
-            if (occAbsMonth <= currentAbsMonth) {
-              const lastRunStr = item.getString('last_run')
-              const lastRunYMD = lastRunStr ? lastRunStr.slice(0, 10) : ''
-              if (!lastRunYMD || lastRunYMD < occYMD) {
-                item.set('last_run', occYMD + ' 12:00:00.000Z')
-                $app.save(item)
-              }
+            const lastRunStr = item.getString('last_run')
+            const lastRunYMD = lastRunStr ? lastRunStr.slice(0, 10) : ''
+            if (!lastRunYMD || lastRunYMD < occYMD) {
+              item.set('last_run', occYMD + ' 12:00:00.000Z')
+              $app.save(item)
             }
             skippedCount++
             continue
@@ -435,10 +435,8 @@ routerAdd(
           createTx(userId, description, amount, txType, categoryId, accountId, occYMD)
           createdCount++
 
-          if (occAbsMonth <= currentAbsMonth) {
-            item.set('last_run', occYMD + ' 12:00:00.000Z')
-            $app.save(item)
-          }
+          item.set('last_run', occYMD + ' 12:00:00.000Z')
+          $app.save(item)
         }
       } catch (itemErr) {
         errorCount++

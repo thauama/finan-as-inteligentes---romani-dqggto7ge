@@ -30,7 +30,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { RecurringModal } from '@/components/finance/RecurringModal'
+import { frequencyLabel, RecurringModal } from '@/components/finance/RecurringModal'
 import { useFinance } from '@/contexts/FinanceContext'
 import { useRealtime } from '@/hooks/use-realtime'
 import { useToast } from '@/hooks/use-toast'
@@ -146,29 +146,36 @@ export default function RecurringPage() {
     })
   }, [recurrings, tab, query, categories])
 
-  const totalMonthlyExpense = useMemo(() => {
-    return recurrings
-      .filter((r) => r.active && r.type === 'despesa')
-      .reduce((sum, r) => {
-        if (r.frequency === 'mensal') return sum + r.amount
-        if (r.frequency === 'semanal') return sum + r.amount * 4.33
-        if (r.frequency === 'quinzenal') return sum + r.amount * 2
-        if (r.frequency === 'anual') return sum + r.amount / 12
-        return sum + r.amount
-      }, 0)
-  }, [recurrings])
+  // Estimativa mensal: cada recorrência pesa amount a cada interval_months
+  // (anual = amount/12 por mês, trimestral = amount/3, ...).
+  const estimateMonthly = (list: RecurringTransaction[]) =>
+    list.reduce((sum, r) => {
+      const interval =
+        r.interval_months && r.interval_months > 0
+          ? Number(r.interval_months)
+          : r.frequency === 'anual'
+            ? 12
+            : r.frequency === 'semestral'
+              ? 6
+              : r.frequency === 'trimestral'
+                ? 3
+                : r.frequency === 'bimestral'
+                  ? 2
+                  : 1
+      if (r.frequency === 'semanal') return sum + r.amount * 4.33
+      if (r.frequency === 'quinzenal') return sum + r.amount * 2
+      return sum + r.amount / interval
+    }, 0)
 
-  const totalMonthlyIncome = useMemo(() => {
-    return recurrings
-      .filter((r) => r.active && r.type === 'receita')
-      .reduce((sum, r) => {
-        if (r.frequency === 'mensal') return sum + r.amount
-        if (r.frequency === 'semanal') return sum + r.amount * 4.33
-        if (r.frequency === 'quinzenal') return sum + r.amount * 2
-        if (r.frequency === 'anual') return sum + r.amount / 12
-        return sum + r.amount
-      }, 0)
-  }, [recurrings])
+  const totalMonthlyExpense = useMemo(
+    () => estimateMonthly(recurrings.filter((r) => r.active && r.type === 'despesa')),
+    [recurrings],
+  )
+
+  const totalMonthlyIncome = useMemo(
+    () => estimateMonthly(recurrings.filter((r) => r.active && r.type === 'receita')),
+    [recurrings],
+  )
 
   return (
     <div className="space-y-6 page-container">
@@ -443,35 +450,15 @@ function RecurringRow({
   const category = categories.find((c) => c.id === item.category) || item.expand?.category
   const account = accounts.find((a) => a.id === item.account) || item.expand?.account
 
-  // Cálculo da próxima execução prevista no frontend
+  // Próxima execução prevista: mesma regra do cron — ocorrências caem nos
+  // meses start + k*interval_months, no dia day_of_month (clampado ao mês).
   const nextRun = useMemo(() => {
     if (!item.active) return null
 
     const now = new Date()
-    const currentYear = now.getUTCFullYear()
-    const currentMonthIdx = now.getUTCMonth()
+    const currentAbsMonth = now.getUTCFullYear() * 12 + now.getUTCMonth()
     const currentDay = now.getUTCDate()
     const day = item.day_of_month || 1
-
-    if (item.frequency === 'mensal') {
-      let targetMonthIdx = currentMonthIdx
-      let targetYear = currentYear
-
-      // Se já passou o dia deste mês, próxima é no mês que vem
-      if (currentDay > day) {
-        targetMonthIdx += 1
-        if (targetMonthIdx > 11) {
-          targetMonthIdx = 0
-          targetYear += 1
-        }
-      }
-
-      const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonthIdx + 1, 0)).getUTCDate()
-      const effectiveDay = Math.min(day, daysInTargetMonth)
-
-      const d = new Date(Date.UTC(targetYear, targetMonthIdx, effectiveDay, 12, 0, 0))
-      return d.toISOString()
-    }
 
     if (item.frequency === 'semanal') {
       const base = item.last_run ? new Date(item.last_run.replace(' ', 'T')) : new Date()
@@ -485,16 +472,41 @@ function RecurringRow({
       return base.toISOString()
     }
 
-    if (item.frequency === 'anual') {
-      const start = new Date(item.start_date.replace(' ', 'T'))
-      const startMonth = start.getUTCMonth()
-      let targetYear = currentYear
-      if (currentMonthIdx > startMonth || (currentMonthIdx === startMonth && currentDay > day)) {
-        targetYear += 1
-      }
-      return new Date(Date.UTC(targetYear, startMonth, day, 12, 0, 0)).toISOString()
-    }
+    const interval =
+      item.interval_months && Number(item.interval_months) > 0
+        ? Number(item.interval_months)
+        : item.frequency === 'anual'
+          ? 12
+          : item.frequency === 'semestral'
+            ? 6
+            : item.frequency === 'trimestral'
+              ? 3
+              : item.frequency === 'bimestral'
+                ? 2
+                : 1
 
+    const start = new Date(item.start_date.replace(' ', 'T'))
+    const startAbsMonth = start.getUTCFullYear() * 12 + start.getUTCMonth()
+
+    let k = Math.ceil((currentAbsMonth - startAbsMonth) / interval)
+    if (k < 0) k = 0
+
+    // Procura a primeira ocorrência ainda não vencida (mês atual ou futuro,
+    // respeitando o dia do mês já passado)
+    for (let guard = 0; guard < 24; guard++) {
+      const occAbsMonth = startAbsMonth + (k + guard) * interval
+      const occYear = Math.floor(occAbsMonth / 12)
+      const occMonthIdx = ((occAbsMonth % 12) + 12) % 12
+      const daysInMonth = new Date(Date.UTC(occYear, occMonthIdx + 1, 0)).getUTCDate()
+      const occDay = Math.min(day, daysInMonth)
+      const occDate = new Date(Date.UTC(occYear, occMonthIdx, occDay, 12, 0, 0))
+      const today = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), currentDay, 12, 0, 0),
+      )
+      if (occDate.getTime() >= today.getTime()) {
+        return occDate.toISOString()
+      }
+    }
     return null
   }, [item])
 
@@ -532,10 +544,14 @@ function RecurringRow({
 
       {/* Frequência */}
       <td className="px-5 py-4 whitespace-nowrap text-fin-muted">
-        <span className="capitalize font-medium text-fin-text">{item.frequency}</span>
-        {(item.frequency === 'mensal' || item.frequency === 'anual') && (
-          <span className="text-xs block text-fin-muted">Todo dia {item.day_of_month || 1}</span>
-        )}
+        <span className="font-medium text-fin-text">{frequencyLabel(item.frequency)}</span>
+        <span className="text-xs block text-fin-muted">
+          {item.frequency === 'semanal'
+            ? 'A cada semana'
+            : item.frequency === 'quinzenal'
+              ? 'A cada 2 semanas'
+              : `Todo dia ${item.day_of_month || 1}`}
+        </span>
       </td>
 
       {/* Categoria / Conta */}

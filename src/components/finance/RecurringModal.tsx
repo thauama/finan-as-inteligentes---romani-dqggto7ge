@@ -29,11 +29,32 @@ interface RecurringModalProps {
   onSaved?: (saved: RecurringTransaction) => void
 }
 
+/** Frequências que o usuário pode escolher no modal, com o intervalo que cada uma grava. */
+export const FREQUENCY_OPTIONS: Array<{
+  value: RecurringFrequency
+  label: string
+  intervalMonths: number
+}> = [
+  { value: 'mensal', label: 'Mensal', intervalMonths: 1 },
+  { value: 'bimestral', label: 'Bimestral', intervalMonths: 2 },
+  { value: 'trimestral', label: 'Trimestral', intervalMonths: 3 },
+  { value: 'semestral', label: 'Semestral', intervalMonths: 6 },
+  { value: 'anual', label: 'Anual', intervalMonths: 12 },
+]
+
+export const frequencyIntervalMonths = (frequency: RecurringFrequency): number =>
+  FREQUENCY_OPTIONS.find((option) => option.value === frequency)?.intervalMonths ?? 1
+
+export const frequencyLabel = (frequency: string): string =>
+  FREQUENCY_OPTIONS.find((option) => option.value === frequency)?.label ??
+  frequency.charAt(0).toUpperCase() + frequency.slice(1)
+
 const initialInput = (type: TransactionType = 'despesa'): RecurringTransactionInput => ({
   description: '',
   amount: 0,
   type,
   frequency: 'mensal',
+  interval_months: 1,
   day_of_month: 5,
   start_date: todayInput(),
   end_date: '',
@@ -66,6 +87,7 @@ export function RecurringModal({
         amount: recurring.amount,
         type: recurring.type,
         frequency: recurring.frequency,
+        interval_months: frequencyIntervalMonths(recurring.frequency),
         day_of_month: recurring.day_of_month || 1,
         start_date: toDateInput(recurring.start_date),
         end_date: recurring.end_date ? toDateInput(recurring.end_date) : '',
@@ -104,6 +126,7 @@ export function RecurringModal({
         localErrors.day_of_month = 'Informe um dia entre 1 e 31.'
       }
     }
+    // (validação de frequência: o select é fechado, sempre tem valor válido)
 
     if (form.end_date && form.start_date && form.end_date < form.start_date) {
       localErrors.end_date = 'A data de término não pode ser anterior ao início.'
@@ -120,8 +143,10 @@ export function RecurringModal({
       const payload: RecurringTransactionInput = {
         ...form,
         amount: numAmount,
-        day_of_month:
-          form.frequency === 'mensal' || form.frequency === 'anual' ? Number(form.day_of_month) : 1,
+        // O intervalo em meses é derivado da frequência escolhida (1=mensal,
+        // 2=bimestral, 3=trimestral, 6=semestral, 12=anual)
+        interval_months: frequencyIntervalMonths(form.frequency),
+        day_of_month: Number(form.day_of_month) || 1,
       }
       const saved = recurring
         ? await updateRecurringTransaction(recurring.id, payload)
@@ -206,30 +231,32 @@ export function RecurringModal({
                 value={form.frequency}
                 onChange={(e) => set('frequency', e.target.value as RecurringFrequency)}
               >
-                <option value="mensal">Mensal</option>
-                <option value="semanal">Semanal</option>
-                <option value="quinzenal">Quinzenal</option>
-                <option value="anual">Anual</option>
+                {FREQUENCY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
+              <span className="text-[11px] text-fin-muted">
+                De quanto em quanto tempo o lançamento é gerado (ex.: Trimestral = a cada 3 meses).
+              </span>
             </Field>
           </div>
 
-          {(form.frequency === 'mensal' || form.frequency === 'anual') && (
-            <Field label="Dia do mês para vencimento / lançamento" error={errors.day_of_month}>
-              <input
-                type="number"
-                min="1"
-                max="31"
-                className="field"
-                value={form.day_of_month || 1}
-                onChange={(e) => set('day_of_month', parseInt(e.target.value, 10) || 1)}
-                placeholder="Ex.: 5"
-              />
-              <span className="text-[11px] text-fin-muted">
-                Em meses com menos dias, o lançamento ocorrerá no último dia útil do mês.
-              </span>
-            </Field>
-          )}
+          <Field label="Dia do mês para vencimento / lançamento" error={errors.day_of_month}>
+            <input
+              type="number"
+              min="1"
+              max="31"
+              className="field"
+              value={form.day_of_month || 1}
+              onChange={(e) => set('day_of_month', parseInt(e.target.value, 10) || 1)}
+              placeholder="Ex.: 5"
+            />
+            <span className="text-[11px] text-fin-muted">
+              Em meses com menos dias, o lançamento ocorrerá no último dia do mês.
+            </span>
+          </Field>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Data de início" error={errors.start_date}>

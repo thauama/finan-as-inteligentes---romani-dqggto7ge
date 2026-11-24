@@ -12,6 +12,8 @@ export interface OnboardingStatus {
   bankCount: number
   cardCount: number
   transactionCount: number
+  /** Flag persistida no backend (settings.onboarding_completed) — fonte de verdade. */
+  onboardingCompleted: boolean
 }
 
 export interface CompleteOnboardingResult {
@@ -37,7 +39,22 @@ export async function checkOnboardingStatus(explicitUserId?: string): Promise<On
       bankCount: 0,
       cardCount: 0,
       transactionCount: 0,
+      onboardingCompleted: false,
     }
+  }
+
+  // Fonte de verdade: a flag persistida em settings (gravada quando o usuário
+  // conclui o onboarding, com backfill para quem já usava o app). Com ela ativa,
+  // o usuário entra direto no app mesmo que apague todos os lançamentos depois.
+  let onboardingCompleted = false
+  try {
+    const settings = await pb
+      .collection('settings')
+      .getFirstListItem(`user = '${userId}'`)
+      .catch(() => null)
+    onboardingCompleted = Boolean(settings?.onboarding_completed)
+  } catch {
+    onboardingCompleted = false
   }
 
   // Busca paralela com limites mínimos de performance
@@ -58,9 +75,9 @@ export async function checkOnboardingStatus(explicitUserId?: string): Promise<On
   const hasTransaction = transactions.totalItems > 0
 
   let completedStepsCount = 0
-  if (hasBank) completedStepsCount++
-  if (hasCard) completedStepsCount++
-  if (hasTransaction) completedStepsCount++
+  if (onboardingCompleted || hasBank) completedStepsCount++
+  if (onboardingCompleted || hasCard) completedStepsCount++
+  if (onboardingCompleted || hasTransaction) completedStepsCount++
 
   let currentStep = 1
   if (!hasBank) {
@@ -72,19 +89,22 @@ export async function checkOnboardingStatus(explicitUserId?: string): Promise<On
   } else {
     currentStep = 4 // Tudo concluído
   }
-
-  const isComplete = hasBank && hasCard && hasTransaction
+  // A flag persistida vence: quem concluiu o onboarding nunca volta para ele —
+  // mesmo sem lançamentos (ex.: apagou tudo depois de configurar). Para quem
+  // nunca concluiu, vale a regra clássica (banco + cartão + lançamento).
+  const isComplete = onboardingCompleted || (hasBank && hasCard && hasTransaction)
 
   return {
     hasBank,
     hasCard,
     hasTransaction,
     isComplete,
-    currentStep,
+    currentStep: isComplete ? 4 : currentStep,
     completedStepsCount,
     bankCount: bankAccounts.totalItems,
     cardCount: cardAccounts.totalItems,
     transactionCount: transactions.totalItems,
+    onboardingCompleted,
   }
 }
 
