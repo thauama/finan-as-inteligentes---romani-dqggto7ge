@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-24T23:32:49.295Z",
+  "generatedAt": "2026-11-24T23:37:22.235Z",
   "collections": [
     {
       "name": "users",
@@ -503,10 +503,9 @@
         },
         {
           "name": "frequency",
-          "type": "select",
+          "type": "text",
           "required": true,
-          "system": false,
-          "selectValues": ["mensal", "semanal", "quinzenal", "anual"]
+          "system": false
         },
         {
           "name": "day_of_month",
