@@ -150,13 +150,24 @@ export interface BudgetInput {
   monthly_limit: number
 }
 
-export type RecurringFrequency = 'mensal' | 'semanal' | 'quinzenal' | 'anual'
+export type RecurringFrequency =
+  | 'mensal'
+  | 'bimestral'
+  | 'trimestral'
+  | 'semestral'
+  | 'semanal'
+  | 'quinzenal'
+  | 'anual'
+
+/** Intervalo em meses entre ocorrências (1=mensal, 2=bimestral, 3=trimestral, 6=semestral, 12=anual). */
+export type RecurringIntervalMonths = 1 | 2 | 3 | 6 | 12
 
 export interface RecurringTransaction extends RecordModel {
   description: string
   amount: number
   type: TransactionType
   frequency: RecurringFrequency
+  interval_months?: RecurringIntervalMonths | number
   day_of_month?: number
   start_date: string
   end_date?: string
@@ -176,6 +187,7 @@ export interface RecurringTransactionInput {
   amount: number
   type: TransactionType
   frequency: RecurringFrequency
+  interval_months?: RecurringIntervalMonths | number
   day_of_month?: number
   start_date: string
   end_date?: string
