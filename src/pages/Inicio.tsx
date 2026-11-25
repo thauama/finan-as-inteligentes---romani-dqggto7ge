@@ -9,20 +9,22 @@ import {
 } from 'lucide-react'
 
 import { useRealtime } from '@/hooks/use-realtime'
+import { MonthYearNav } from '@/components/finance/MonthYearNav'
 import { brl, currentMonth, monthBounds, monthTitle, shiftMonth, toDateInput } from '@/lib/format'
 import { listBills } from '@/services/bills'
 import { listTransactions } from '@/services/transactions'
 import type { Bill, Transaction } from '@/types/finance'
 
 /**
- * Aba Início — comparação Previsto × Realizado do mês corrente.
+ * Aba Início — comparação Previsto × Realizado do mês selecionado
+ * (padrão: mês corrente; navegação permite qualquer mês de qualquer ano).
  *
  * Definições (mesmas janelas/regras do Dashboard, regra v0.0.21 de parcelas):
  * - Previsto para entrar  = receitas lançadas no mês + contas a receber pendentes com vencimento no mês.
  * - Previsto para pagar   = despesas lançadas no mês (parcela conta só no mês do vencimento) +
  *                           contas a pagar pendentes com vencimento no mês.
  * - Já recebido / já pago = apenas os lançamentos do mês (dinheiro que movimentou de fato).
- * - Sobra do mês anterior = acumulado realizado até o fim do mês anterior
+ * - Sobra do mês anterior = acumulado realizado até o fim do mês anterior ao SELECIONADO
  *                           (todas as receitas − despesas com data anterior ao mês exibido).
  * - Transferências ficam fora de todos os totais.
  */
@@ -30,6 +32,7 @@ export default function InicioPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [bills, setBills] = useState<Bill[]>([])
   const [loading, setLoading] = useState(true)
+  const [month, setMonth] = useState<string>(() => currentMonth())
 
   const reload = useCallback(async () => {
     try {
@@ -51,7 +54,6 @@ export default function InicioPage() {
     void reload()
   })
 
-  const month = currentMonth()
   const { start, next } = monthBounds(month)
   const monthStartDay = start.slice(0, 10)
   const monthEndDay = next.slice(0, 10)
@@ -107,15 +109,18 @@ export default function InicioPage() {
 
   return (
     <div className="space-y-6 page-container">
-      <section>
-        <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-fin-muted">
-          Planejamento
-        </p>
-        <h1 className="page-title">Início</h1>
-        <p className="page-subtitle">
-          Previsto × realizado de {monthTitle(month)} — o que falta receber e pagar ainda entra na
-          conta.
-        </p>
+      <section className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-fin-muted">
+            Planejamento
+          </p>
+          <h1 className="page-title">Início</h1>
+          <p className="page-subtitle">
+            Previsto × realizado de {monthTitle(month)} — o que falta receber e pagar ainda entra na
+            conta.
+          </p>
+        </div>
+        <MonthYearNav month={month} onChange={setMonth} />
       </section>
 
       <section className="grid gap-5 xl:grid-cols-2">
